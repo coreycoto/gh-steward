@@ -1,0 +1,119 @@
+{
+  "repo": {
+    "host": "github.com",
+    "owner": "sample-org",
+    "name": "sample-project",
+    "nameWithOwner": "sample-org/sample-project",
+    "url": "https://github.com/sample-org/sample-project"
+  },
+  "project": {
+    "id": "PVT_sample",
+    "number": 7,
+    "title": "Roadmap",
+    "owner_login": "sample-org",
+    "url": "https://github.com/users/sample-org/projects/7"
+  },
+  "issue_graph": {
+    "repo": {
+      "host": "github.com",
+      "owner": "sample-org",
+      "name": "sample-project",
+      "nameWithOwner": "sample-org/sample-project",
+      "url": "https://github.com/sample-org/sample-project"
+    },
+    "project": {
+      "id": "PVT_sample",
+      "number": 7,
+      "title": "Roadmap",
+      "owner_login": "sample-org",
+      "url": "https://github.com/users/sample-org/projects/7"
+    },
+    "issues": [
+      {"number": 1, "title": "Task: Foundation", "prefix": "Task", "body": "", "state": "OPEN", "milestone": null, "blocked_by_numbers": [], "blocking_numbers": [2], "parent_number": null, "child_numbers": []},
+      {"number": 2, "title": "Task: Follow-up", "prefix": "Task", "body": "", "state": "OPEN", "milestone": null, "blocked_by_numbers": [1], "blocking_numbers": [], "parent_number": null, "child_numbers": []},
+      {"number": 3, "title": "Task: Urgent", "prefix": "Task", "body": "urgent customer request", "state": "OPEN", "milestone": "2026 Q4", "blocked_by_numbers": [], "blocking_numbers": [], "parent_number": null, "child_numbers": []},
+      {"number": 4, "title": "Task: Completed", "prefix": "Task", "body": "", "state": "CLOSED", "milestone": null, "blocked_by_numbers": [], "blocking_numbers": [], "parent_number": null, "child_numbers": []}
+    ]
+  },
+  "queue_snapshot": {
+    "repo": {
+      "host": "github.com",
+      "owner": "sample-org",
+      "name": "sample-project",
+      "nameWithOwner": "sample-org/sample-project",
+      "url": "https://github.com/sample-org/sample-project"
+    },
+    "project": {
+      "id": "PVT_sample",
+      "number": 7,
+      "title": "Roadmap",
+      "owner_login": "sample-org",
+      "url": "https://github.com/users/sample-org/projects/7"
+    },
+    "generated_at": "2026-01-01T00:00:00Z",
+    "item_count": 3,
+    "project_item_count": 4,
+    "excluded_count": 0,
+    "items": [
+      {"number": 1, "title": "Task: Foundation", "prefix": "Task", "state": "OPEN", "field_values": {"Priority": "Now", "Queue Order": 10.5, "Status": "Todo"}, "blocked_by_numbers": [], "child_numbers": [], "actionable_child_numbers": [], "project_item": {"item_id": "ITEM_1"}},
+      {"number": 2, "title": "Task: Follow-up", "prefix": "Task", "state": "OPEN", "field_values": {"Priority": "Now", "Queue Order": 20, "Status": "In Progress"}, "blocked_by_numbers": [1], "child_numbers": [], "actionable_child_numbers": [], "project_item": {"item_id": "ITEM_2"}},
+      {"number": 3, "title": "Task: Urgent", "prefix": "Task", "state": "OPEN", "field_values": {"Priority": "Next", "Queue Order": 2.25, "Status": "Todo"}, "blocked_by_numbers": [], "child_numbers": [], "actionable_child_numbers": [], "project_item": {"item_id": "ITEM_3"}}
+    ],
+    "excluded_items": []
+  },
+  "project_snapshot": {
+    "repo": {
+      "host": "github.com",
+      "owner": "sample-org",
+      "name": "sample-project",
+      "nameWithOwner": "sample-org/sample-project",
+      "url": "https://github.com/sample-org/sample-project"
+    },
+    "project": {
+      "id": "PVT_sample",
+      "number": 7,
+      "title": "Roadmap",
+      "owner_login": "sample-org",
+      "url": "https://github.com/users/sample-org/projects/7"
+    },
+    "items": [
+      {"number": 1, "item_id": "ITEM_1", "title": "Task: Foundation", "state": "OPEN", "field_values": {"Priority": "Now", "Queue Order": 10.5, "Status": "Todo"}},
+      {"number": 2, "item_id": "ITEM_2", "title": "Task: Follow-up", "state": "OPEN", "field_values": {"Priority": "Now", "Queue Order": 20, "Status": "In Progress"}},
+      {"number": 3, "item_id": "ITEM_3", "title": "Task: Urgent", "state": "OPEN", "field_values": {"Priority": "Next", "Queue Order": 2.25, "Status": "Todo"}},
+      {"number": 4, "item_id": "ITEM_4", "title": "Task: Completed", "state": "CLOSED", "field_values": {"Priority": "Later", "Queue Order": 40, "Status": "Done"}}
+    ]
+  },
+  "relationship_payload": {
+    "schema_version": 1,
+    "issues": [
+      {"issue_number": 2, "desired_blocked_by_issue_numbers": [1, 3]},
+      {"issue_number": 3, "desired_parent_issue_number": 1}
+    ],
+    "notes": "review local topology"
+  },
+  "rebalance_payload": {
+    "schema_version": 1,
+    "project_title": "Roadmap",
+    "now_issue_numbers": [2, 1],
+    "next_issue_numbers": [3],
+    "later_issue_numbers": [],
+    "archive_issue_numbers": [4],
+    "notes": "review before apply"
+  },
+  "ranking_policy": {
+    "schema_version": 1,
+    "band_targets": {"now": 2, "next": 1},
+    "sparse_rank_step": 10,
+    "weights": {
+      "current_priority": {"Now": 5, "Next": 0, "Later": -1, "unknown": -2},
+      "status": {"Todo": 1, "In Progress": 0, "Done": -1, "unknown": -2},
+      "milestone": {"present": 1},
+      "prefix": {"Task": 0, "unknown": -1},
+      "dependency": {"blocked": -20, "blocking": 2},
+      "hierarchy": {"has_actionable_child": -10, "has_children": -2},
+      "field_health": {"missing_priority": -5, "missing_queue_order": -5},
+      "pr_state": {"missing": 0, "merged": 1, "open_draft": 0, "open_ready": 1, "closed_unmerged": -1}
+    },
+    "body_patterns": [{"name": "urgent", "pattern": "urgent", "weight": 2}]
+  }
+}

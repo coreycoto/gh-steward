@@ -1,0 +1,26 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "gh-steward",
+  "version": "0.1.0",
+  "description": "Prepare and safely apply reviewed repository issue, Project, and relationship changes with the GitHub CLI extension.",
+  "author": {
+    "name": "Corey Coto"
+  },
+  "homepage": "https://github.com/coreycoto/gh-steward",
+  "repository": "https://github.com/coreycoto/gh-steward",
+  "license": "MIT",
+  "keywords": [
+    "github",
+    "github-cli",
+    "issues",
+    "projects",
+    "planning"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "gh-steward"
+      }
+    }
+  }
+}

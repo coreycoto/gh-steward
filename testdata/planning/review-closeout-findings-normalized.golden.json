@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "mode": "epic-closeout",
+  "scope": "Release readiness",
+  "findings": [
+    {
+      "id": "finding-1",
+      "title": "Document the agent boundary",
+      "canonical_title": "Document the agent boundary",
+      "severity": "high",
+      "summary": "The operator notes need a clear boundary.",
+      "blocking": true,
+      "destination": "agents-note",
+      "target_paths": ["docs/agent.md"],
+      "body": "",
+      "files": [],
+      "evidence": [{"path": "docs/agent.md", "line": 10, "detail": "Missing example."}],
+      "notes": "",
+      "issue_type": null,
+      "group_key": null,
+      "backlog_title": null,
+      "canonical_backlog_title": null,
+      "existing_issue": null,
+      "blocked_by_issue_numbers": [],
+      "parent_issue_number": null
+    },
+    {
+      "id": "finding-2",
+      "title": "Review retry handling",
+      "canonical_title": "Bug: Review retry handling",
+      "severity": "next",
+      "summary": "Bound retries after ambiguous outcomes.",
+      "blocking": false,
+      "destination": "backlog",
+      "target_paths": [],
+      "body": "",
+      "files": [],
+      "evidence": [],
+      "notes": "",
+      "issue_type": "Bug",
+      "group_key": "retry-boundary",
+      "backlog_title": "Retry state handling",
+      "canonical_backlog_title": "Bug: Retry state handling",
+      "existing_issue": 77,
+      "blocked_by_issue_numbers": [2, 4],
+      "parent_issue_number": 90
+    }
+  ],
+  "epic_issue_number": 99
+}

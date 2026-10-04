@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "quarter": "2026 Q1",
+  "quarter_goals": ["Ship the migration.", "Reduce retry noise."],
+  "active_tracks": ["Reliability"],
+  "commit_issue_numbers": [1, 2],
+  "issue_rationale": {
+    "2": "Needed for the migration.",
+    "4": "No longer committed this quarter."
+  }
+}

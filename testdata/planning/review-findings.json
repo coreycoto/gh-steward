@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "scope": "  component review  ",
+  "findings": [
+    {
+      "id": "parser-a",
+      "title": "Stabilize parser",
+      "issue_type": "bug",
+      "severity": "HIGH",
+      "summary": "Malformed input can stop parsing.",
+      "group_key": "parser-stability",
+      "backlog_title": "Parser stabilization",
+      "body": "Keep malformed input bounded.",
+      "files": ["src/parser.go", "src/parser.go"],
+      "evidence": [{"path": "src/parser.go", "line": 7, "detail": "Unchecked token."}],
+      "parent_issue_number": 12,
+      "blocked_by_issue_numbers": [4, 3, 4]
+    },
+    {
+      "id": "parser-b",
+      "title": "Add a parser guard",
+      "issue_type": "Bug:",
+      "severity": "next",
+      "summary": "A guard will cover truncated input.",
+      "group_key": "parser-stability",
+      "backlog_title": "Parser stabilization",
+      "existing_issue": 42,
+      "parent_issue_number": 12,
+      "blocked_by_issue_numbers": [4]
+    },
+    {
+      "title": "Import flow",
+      "issue_type": "Enhancement",
+      "severity": "low",
+      "summary": "Make import failures easier to diagnose.",
+      "files": ["src/import.go"],
+      "evidence": [{"path": "src/import.go", "line": 5, "summary": "Error lacks context."}]
+    }
+  ]
+}
