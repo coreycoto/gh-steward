@@ -18,6 +18,7 @@ type deliveryNativeFixture struct {
 	merged, deleted, dependent, malformedChecks, branchDrift bool
 	foreignClosing, changedClosingHead, retentionDrift       bool
 	omitHeadID, headIdentityDrift                            bool
+	openHead, headIsDraft, headIsSelected, failHeadRead      bool
 	failFacet                                                string
 	recreateAfterRepo, repoReads, deliveryRepoReads          int
 	calls                                                    []string
@@ -78,7 +79,24 @@ func (f *deliveryNativeFixture) Execute(_ context.Context, _ string, args []stri
 			}
 			r["ref"] = contract.Object{"id": "REF_" + name, "name": name, "prefix": "refs/heads/", "target": contract.Object{"oid": sha}}
 		case strings.Contains(query, "headRefName:$head"):
-			r["pullRequests"] = executionNativeConnection()
+			if f.failHeadRead {
+				return native.Result{ExitCode: 1}, nil
+			}
+			rows := []any{}
+			if f.openHead {
+				number := int64(4)
+				if f.headIsSelected {
+					number = 3
+				}
+				repository := testRepo().Object()
+				repository["id"] = "R_widgets"
+				rows = append(rows, contract.Object{"id": fmt.Sprintf("PR_%d", number), "number": number,
+					"url": fmt.Sprintf("%s/pull/%d", testRepo().URL, number), "title": "Active branch reuse", "body": "",
+					"state": "OPEN", "isDraft": f.headIsDraft, "merged": false, "headRefName": "codex/issue-17", "baseRefName": "main",
+					"headRefOid": strings.Repeat("a", 40), "baseRefOid": strings.Repeat("b", 40), "maintainerCanModify": false,
+					"repository": repository, "headRepository": repository})
+			}
+			r["pullRequests"] = executionNativeConnection(rows...)
 		case strings.Contains(query, "baseRefName:$base"):
 			rows := []any{}
 			if f.dependent {
@@ -190,5 +208,25 @@ func TestNativeDeliveryDoesNotTurnFailedOrChangedSourcesIntoCleanEvidence(t *tes
 	bad["unreviewed"] = true
 	if _, err := deliveryBridge(f).DeliveryInventory(context.Background(), DeliveryInventoryRequest{Kind: DeliveryOpenPR, Policy: bad}); err == nil || len(f.calls) != 0 {
 		t.Fatal("invalid policy reached native IO", err, f.calls)
+	}
+}
+
+func TestNativeDeliveryPreservesOtherOpenHeadsAndAllowsItsOwnSelectedPR(t *testing.T) {
+	for _, draft := range []bool{false, true} {
+		f := &deliveryNativeFixture{openHead: true, headIsDraft: draft}
+		if _, err := PrepareDelivery(context.Background(), deliveryBridge(f), testRepo(), DeliveryFinish, deliveryBridgeFinishPolicy(false), time.Now()); err == nil {
+			t.Fatal("finish would delete another open PR's head", draft)
+		}
+		if _, err := PrepareDelivery(context.Background(), deliveryBridge(f), testRepo(), DeliveryFinish, deliveryBridgeFinishPolicy(true), time.Now()); err != nil {
+			t.Fatal("keeping the branch should preserve the other open PR", err)
+		}
+	}
+	f := &deliveryNativeFixture{openHead: true, headIsSelected: true}
+	if _, err := PrepareDelivery(context.Background(), deliveryBridge(f), testRepo(), DeliveryFinish, deliveryBridgeFinishPolicy(false), time.Now()); err != nil {
+		t.Fatal("the selected PR cannot block its own reviewed merge and cleanup", err)
+	}
+	f = &deliveryNativeFixture{failHeadRead: true}
+	if _, err := PrepareDelivery(context.Background(), deliveryBridge(f), testRepo(), DeliveryFinish, deliveryBridgeFinishPolicy(false), time.Now()); err == nil {
+		t.Fatal("failed head inventory was treated as no active PR")
 	}
 }

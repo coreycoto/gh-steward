@@ -19,10 +19,13 @@ gh steward branches prepare --repo-root . --input payload=branches.json --out br
 ```
 
 Preparation captures the complete repository identity, default branch, selected
-merged PRs, native branch refs and all open PRs based on each selected branch.
+merged PRs, native branch refs and all open PRs using each selected branch as a
+base or head.
 The selected PR must belong to this repository, be merged and non-draft, and
 identify the exact branch and SHA. Default branches and branches with open
-dependents cannot be deleted. A draft dependent PR still protects its base.
+dependents or reused open heads cannot be deleted. Draft PRs protect both their
+base and head branches. A merged PR's exact SHA alone does not prove that its
+branch is unused.
 
 Review the exact v2 plan and obtain approval for its deletion scope and hash:
 

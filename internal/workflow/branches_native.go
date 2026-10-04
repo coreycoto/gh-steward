@@ -83,6 +83,9 @@ func (n NativeBranchCleanup) BranchCleanupInventory(ctx context.Context, rawSele
 			return nil, err
 		}
 		candidate["pull_request"] = pr
+		if err := requireNoOtherOpenBranchHeads(ctx, n.Transport, repository["id"].(string), name, 0); err != nil {
+			return nil, err
+		}
 		dependents, err := n.Transport.ReadOpenPullRequestsForBase(ctx, name)
 		if err != nil {
 			return nil, err
@@ -103,6 +106,34 @@ func (n NativeBranchCleanup) BranchCleanupInventory(ctx context.Context, rawSele
 	}
 	return contract.Object{"repo": n.Transport.Repository.Object(), "repository_node_id": repository["id"], "default_branch": defaultBranch, "branches": candidates,
 		"provenance": contract.Object{"live": true, "complete": true, "source": "github_api", "repository_node_id": repository["id"], "selection": selection}}, nil
+}
+
+// A branch can be reused without moving its SHA. The selected merged PR alone
+// therefore cannot prove that deleting the ref will preserve active work.
+// Delivery may keep its own selected PR open until the reviewed merge step;
+// every other open head, including a draft, protects the branch.
+func requireNoOtherOpenBranchHeads(ctx context.Context, transport *native.Transport, repositoryNodeID, branch string, selectedPR int64) error {
+	collection, err := transport.ReadPullRequestsForHead(ctx, branch)
+	if err != nil {
+		return err
+	}
+	if collection["repository_node_id"] != repositoryNodeID {
+		return errors.New("branch head PR collection repository incarnation changed")
+	}
+	rows, err := contract.Objects(collection, "pull_requests")
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		number, err := contract.PositiveInteger(row["number"])
+		if err != nil {
+			return err
+		}
+		if row["state"] == "OPEN" && number != selectedPR {
+			return errors.New("branch removal would discard the head of another open PR")
+		}
+	}
+	return nil
 }
 
 func (n NativeBranchCleanup) DeleteBranch(ctx context.Context, nonce, branch, expectedSHA, repositoryNodeID string) (contract.Object, error) {

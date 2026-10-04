@@ -118,6 +118,9 @@ func (n NativeDelivery) DeliveryInventory(ctx context.Context, request DeliveryI
 		pr["closing_issue_numbers"] = closing["closing_issue_numbers"]
 		result["pull_request"] = pr
 		if request.Policy["keep_branch"] == false {
+			if err := requireNoOtherOpenBranchHeads(ctx, n.Transport, repository["id"].(string), pr["headRefName"].(string), number); err != nil {
+				return nil, err
+			}
 			dependents, err := n.Transport.ReadOpenPullRequestsForBase(ctx, pr["headRefName"].(string))
 			if err != nil {
 				return nil, err

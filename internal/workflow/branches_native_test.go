@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -41,5 +42,29 @@ func TestNativeBranchCleanupRequiresCompleteCurrentRefsAndMergedPRs(t *testing.T
 	}
 	if _, err := (NativeBranchCleanup{Transport: bridgeTransport(f)}).BranchCleanupInventory(context.Background(), contract.Object{"branches": "all"}); err == nil || len(f.calls) != 0 {
 		t.Fatal("unreviewed broad selection reached IO", err, f.calls)
+	}
+}
+
+func TestNativeBranchCleanupProtectsReusedOpenHeadsBeforePreparationAndApply(t *testing.T) {
+	for _, draft := range []bool{false, true} {
+		t.Run(fmt.Sprintf("draft_%t", draft), func(t *testing.T) {
+			f := &deliveryNativeFixture{merged: true}
+			n := NativeBranchCleanup{Transport: bridgeTransport(f)}
+			plan, err := PrepareBranchCleanup(context.Background(), n, testRepo(), branchTestSelection(1), time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.openHead, f.headIsDraft = true, draft
+			if _, err := PrepareBranchCleanup(context.Background(), n, testRepo(), branchTestSelection(1), time.Now()); err == nil {
+				t.Fatal("reused open head was prepared for deletion")
+			}
+			if err := (BranchCleanup{Provider: n}).Preflight(context.Background(), plan, nil); err == nil {
+				t.Fatal("an open head introduced after review did not block apply")
+			}
+		})
+	}
+	f := &deliveryNativeFixture{merged: true, failHeadRead: true}
+	if _, err := PrepareBranchCleanup(context.Background(), NativeBranchCleanup{Transport: bridgeTransport(f)}, testRepo(), branchTestSelection(1), time.Now()); err == nil {
+		t.Fatal("failed head inventory was treated as no active PR")
 	}
 }
