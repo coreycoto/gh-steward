@@ -28,25 +28,31 @@ type Executor interface {
 	Execute(context.Context, string, []string, []byte, string, []string) (Result, error)
 }
 
-type ProcessExecutor struct{}
+type ProcessExecutor struct{ outputLimit int }
 
 type limitedBuffer struct {
 	bytes.Buffer
 	overflow bool
+	limit    int
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > contract.MaxJSONBytes {
+	limit := b.limit
+	if limit == 0 {
+		limit = contract.MaxJSONBytes
+	}
+	if b.Len()+len(p) > limit {
 		b.overflow = true
 		return len(p), nil
 	}
 	return b.Buffer.Write(p)
 }
 
-func (ProcessExecutor) Execute(ctx context.Context, executable string, args []string, input []byte, cwd string, env []string) (Result, error) {
+func (executor ProcessExecutor) Execute(ctx context.Context, executable string, args []string, input []byte, cwd string, env []string) (Result, error) {
 	command := exec.CommandContext(ctx, executable, args...)
 	command.Dir, command.Env, command.Stdin = cwd, env, bytes.NewReader(input)
 	var stdout, stderr limitedBuffer
+	stdout.limit = executor.outputLimit
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err := command.Run()
 	result := Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}

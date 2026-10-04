@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "gh-steward",
-  "version": "0.1.0",
-  "description": "Prepare and safely apply reviewed repository issue, Project, and relationship changes with the GitHub CLI extension.",
+  "version": "0.2.0",
+  "description": "Prepare and apply reviewed GitHub changes, and recover exact workflow attempts through the GitHub CLI extension.",
   "author": {
     "name": "Corey Coto"
   },

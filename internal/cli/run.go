@@ -21,11 +21,12 @@ import (
 	"github.com/coreycoto/gh-steward/internal/governance"
 	"github.com/coreycoto/gh-steward/internal/native"
 	"github.com/coreycoto/gh-steward/internal/planning"
+	"github.com/coreycoto/gh-steward/internal/runrecovery"
 	"github.com/coreycoto/gh-steward/internal/snapshot"
 	"github.com/coreycoto/gh-steward/internal/workflow"
 )
 
-var Version = "0.1.0-dev"
+var Version = "0.2.0-dev"
 var SourceRevision = "unknown"
 var SourceDirty = "unknown"
 
@@ -37,6 +38,7 @@ func (i *inputsFlag) Set(value string) error { *i = append(*i, value); return ni
 type Runner struct {
 	Out, Err io.Writer
 	Input    io.Reader
+	Actions  runrecovery.ActionsReader
 }
 
 func (r Runner) Run(ctx context.Context, args []string) error {
@@ -73,6 +75,9 @@ func (r Runner) Run(ctx context.Context, args []string) error {
 	}
 	if len(args) < 2 {
 		return errors.New("command family requires an action")
+	}
+	if args[0] == "runs" {
+		return r.runRecovery(ctx, args[1:])
 	}
 	command, err := commandID(args[0], args[1])
 	if err != nil {
@@ -843,6 +848,25 @@ gh steward backlog-mutations prepare --input payload=FILE --input projects=FILE
 gh steward quarter prepare --input payload=FILE
 gh steward merge prepare --policy FILE --input event=FILE
 gh steward backlog|backlog-mutations|review|quarter|merge|execution|artifacts|governance|closeout|delivery|branches apply --input plan=FILE --approve-plan-sha EXACT_SHA256
+gh steward runs digest --input document=FILE
+gh steward runs recover --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH
+gh steward runs acquire-handoff --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --artifact-id ID --artifact-digest sha256:DIGEST [--purpose apply|transport]
+gh steward runs verify-publication --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA
+gh steward runs acquire-publication-candidate --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA --artifact-id ID --artifact-digest sha256:DIGEST
+gh steward runs finish-noop --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA
+gh steward runs finalize --workflow FILE --run-id ID --attempt N --package-root PATH --artifact-id ID --artifact-digest sha256:DIGEST --checkpoint PATH [--workflow-sha CONTROL_SHA]
+gh steward runs context-start|context-observe|context-observe-source --package-root PATH --input context=FILE
+gh steward runs context-record-plan --package-root PATH --input plan=FILE
+gh steward runs context-phase --package-root PATH --phase PHASE [--reason REASON]
+gh steward runs context-mark-plan --package-root PATH --name NAME --status STATUS
+gh steward runs context-capture-journal|context-install-journal --package-root PATH --name NAME --journal-root PATH
+  Runs uses --policy FILE from the trusted checkout (default .agents/gh-steward-recovery-policy.json).
+  Packages must be real direct children of --runner-temp PATH (default RUNNER_TEMP).
+  --github-output PATH appends bounded outputs to an existing regular Actions output file.
+  Recovery outcomes are fresh, resumed, terminal, or recovery_needed. These commands
+  read provider state and persist local proofs; they never dispatch provider mutations.
+  Publication finalization requires --workflow-sha outside Actions; in Actions it
+  is bound to GITHUB_WORKFLOW_SHA. Context commands are provider-free.
   Preparation captures live complete state. Apply accepts only the exact reviewed plan;
   selector/policy overrides are rejected and unknown writes are never replayed.
   Pure planning consumes named complete snapshots, authored payloads and consumer policy.
