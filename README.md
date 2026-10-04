@@ -61,7 +61,7 @@ Live `prepare` commands read the selected repository through the authenticated G
 For example, extracting an execution plan uses:
 
 ```sh
-gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=execution-prepare.json --outer-command execution-prepare --plan-command execution-sync --out reviewed-plan.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=execution-prepare.json --outer-command execution-sync-prepare --plan-command execution-sync --out reviewed-plan.json
 ```
 
 Use `gh steward plan validate --repo-root . --repo "$REPOSITORY_URL" --input plan=reviewed-plan.json --plan-command execution-sync` to validate a standalone plan before registering it in a local workflow context. Validation checks the plan's canonical shape, repository, command, complete live source evidence, capture time, and digest; it writes only a small result envelope to stdout and leaves the plan unchanged. Inspect the complete extracted plan, including its repository and Project identities, source completeness, before-state values, operations, and `sha256`, before requesting approval.
