@@ -217,9 +217,9 @@ func (t *Transport) ReadProjectPage(ctx context.Context, p ProjectScope, section
 			return nil, errors.New("metadata does not accept a pagination cursor")
 		}
 	case "fields":
-		selection += fieldDefinitions
+		selection += " " + fieldDefinitions
 	case "items":
-		selection += projectItems
+		selection += " " + projectItems
 	default:
 		return nil, errors.New("unsupported Project read section")
 	}

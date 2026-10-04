@@ -112,7 +112,7 @@ The extension records per-operation intent and results in a private, checkout-lo
 
 ## Recover isolated workflow attempts
 
-The unreleased 0.2.0 candidate adds `runs` commands for shared workflow recovery. The published 0.1.0 executable does not contain these commands. They read GitHub Actions history and persist local evidence; provider mutations remain in the separately authorized domain apply commands.
+The released 0.2.0 executable adds `runs` commands for shared workflow recovery; 0.1.0 does not contain them. These commands read GitHub Actions history and persist local evidence; provider mutations remain in the separately authorized domain apply commands.
 
 Consumers keep a reviewed `.agents/gh-steward-recovery-policy.json` in their trusted control checkout. It declares exact workflow files, mutation steps, plan profiles, approval/event contracts, and optional publication support. `runs recover` scans complete workflow attempts and artifact inventories, validates immutable checkpoints, and returns `fresh`, `resumed`, `terminal`, or `recovery_needed`. A held predecessor prevents fresh work. A settled rerun returns `terminal` and cannot prepare another target. The scanner does not infer safety from an old skipped step, missing artifact, or unsupported plan.
 
