@@ -1,0 +1,4 @@
+/.artifacts/
+/dist/
+/gh-steward
+/coverage.out

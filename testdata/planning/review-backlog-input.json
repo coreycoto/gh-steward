@@ -1,0 +1,22 @@
+{
+  "findings": {
+    "schema_version": 1,
+    "scope": "component review",
+    "findings": [
+      {"id": "parser-a", "title": "Stabilize parser", "issue_type": "Bug", "severity": "high", "summary": "Malformed input can stop parsing.", "group_key": "parser-stability", "backlog_title": "Parser stabilization", "body": "Keep malformed input bounded.", "files": ["src/parser.go"], "evidence": [{"path": "src/parser.go", "line": 7, "detail": "Unchecked token."}], "parent_issue_number": 12, "blocked_by_issue_numbers": [3, 4]},
+      {"id": "parser-b", "title": "Add a parser guard", "issue_type": "Bug", "severity": "next", "summary": "A guard will cover truncated input.", "group_key": "parser-stability", "backlog_title": "Parser stabilization", "existing_issue": 42, "parent_issue_number": 12, "blocked_by_issue_numbers": [4]}
+    ]
+  },
+  "repo": {"host": "github.com", "owner": "sample-org", "name": "sample-project", "nameWithOwner": "sample-org/sample-project", "url": "https://github.com/sample-org/sample-project"},
+  "project_title": "Work Queue",
+  "issue_catalog_mode": "live",
+  "issue_catalog": [
+    {"number": 42, "title": "Bug: Parser stabilization", "state": "OPEN"},
+    {"number": 50, "title": "Enhancement: Import command flow", "state": "CLOSED"},
+    {"number": 17, "title": "Enhancement: Legacy import parser", "state": "CLOSED"}
+  ],
+  "policy": {
+    "severity_to_priority": {"critical": "Now", "high": "Now", "now": "Now", "medium": "Next", "next": "Next", "low": "Later", "later": "Later"},
+    "issue_type_labels": {"Initiative": "initiative", "Epic": "epic", "Research": "question", "Enhancement": "enhancement", "Bug": "bug", "Maintenance": "maintenance"}
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "plan": {
+    "schema_version": 1,
+    "quarter": "2026 Q1",
+    "quarter_goals": ["Ship the migration."],
+    "active_tracks": ["Reliability"],
+    "commit_issue_numbers": [1, 2],
+    "issue_rationale": {"2": "Needed for the migration.", "4": "No longer committed this quarter."}
+  },
+  "repo": {
+    "host": "github.com", "owner": "sample-org", "name": "sample-project",
+    "nameWithOwner": "sample-org/sample-project", "url": "https://github.com/sample-org/sample-project"
+  },
+  "issue_graph": {
+    "repo": {
+      "host": "github.com", "owner": "sample-org", "name": "sample-project",
+      "nameWithOwner": "sample-org/sample-project", "url": "https://github.com/sample-org/sample-project"
+    },
+    "issues": [
+      {"id": "ISSUE_1", "number": 1, "title": "Bug: Existing commitment", "state": "OPEN", "url": "https://github.com/sample-org/sample-project/issues/1", "milestone": "2026 Q1"},
+      {"id": "ISSUE_2", "number": 2, "title": "Enhancement: New commitment", "state": "OPEN", "url": "https://github.com/sample-org/sample-project/issues/2", "milestone": null},
+      {"id": "ISSUE_3", "number": 3, "title": "Maintenance: Other quarter", "state": "OPEN", "url": "https://github.com/sample-org/sample-project/issues/3", "milestone": "2026 Q2"},
+      {"id": "ISSUE_4", "number": 4, "title": "Bug: Removed commitment", "state": "OPEN", "url": "https://github.com/sample-org/sample-project/issues/4", "milestone": "2026 Q1"}
+    ]
+  },
+  "milestone_audit": {"summary": {"finding_count": 2}},
+  "source_evidence": {
+    "issues": {"source": "github_api", "live": true, "complete": true},
+    "milestones": {"source": "github_rest_api", "live": true, "complete": true},
+    "rationale_comments": {"source": "github_rest_api", "live": true, "complete": true}
+  },
+  "milestones": [
+    {"number": 14, "title": "2026 Q1", "state": "open", "description": "Earlier description.", "due_on": "2026-03-31T23:59:59Z"}
+  ],
+  "rationale_comments_by_issue": {
+    "2": {"body": null, "ids": []},
+    "4": {"body": "Existing rationale comment.", "ids": [91]}
+  }
+}

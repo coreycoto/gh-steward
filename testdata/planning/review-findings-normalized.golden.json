@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "scope": "component review",
+  "findings": [
+    {
+      "id": "parser-a",
+      "title": "Stabilize parser",
+      "canonical_title": "Bug: Stabilize parser",
+      "issue_type": "Bug",
+      "severity": "high",
+      "summary": "Malformed input can stop parsing.",
+      "group_key": "parser-stability",
+      "backlog_title": "Parser stabilization",
+      "canonical_backlog_title": "Bug: Parser stabilization",
+      "body": "Keep malformed input bounded.",
+      "files": ["src/parser.go"],
+      "evidence": [{"path": "src/parser.go", "line": 7, "detail": "Unchecked token."}],
+      "existing_issue": null,
+      "notes": "",
+      "blocked_by_issue_numbers": [3, 4],
+      "parent_issue_number": 12
+    },
+    {
+      "id": "parser-b",
+      "title": "Add a parser guard",
+      "canonical_title": "Bug: Add a parser guard",
+      "issue_type": "Bug",
+      "severity": "next",
+      "summary": "A guard will cover truncated input.",
+      "group_key": "parser-stability",
+      "backlog_title": "Parser stabilization",
+      "canonical_backlog_title": "Bug: Parser stabilization",
+      "body": "",
+      "files": [],
+      "evidence": [],
+      "existing_issue": 42,
+      "notes": "",
+      "blocked_by_issue_numbers": [4],
+      "parent_issue_number": 12
+    },
+    {
+      "id": "finding-3",
+      "title": "Import flow",
+      "canonical_title": "Enhancement: Import flow",
+      "issue_type": "Enhancement",
+      "severity": "low",
+      "summary": "Make import failures easier to diagnose.",
+      "group_key": null,
+      "backlog_title": null,
+      "canonical_backlog_title": null,
+      "body": "",
+      "files": ["src/import.go"],
+      "evidence": [{"path": "src/import.go", "line": 5, "summary": "Error lacks context."}],
+      "existing_issue": null,
+      "notes": "",
+      "blocked_by_issue_numbers": [],
+      "parent_issue_number": null
+    }
+  ]
+}

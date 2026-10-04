@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux/amd64
+          - runner: ubuntu-24.04-arm
+            target: linux/arm64
+          - runner: macos-15-intel
+            target: darwin/amd64
+          - runner: macos-15
+            target: darwin/arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pinned Go toolchain
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: 1.27.1
+          cache-dependency-path: go.sum
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Verify native qualification target
+        shell: bash
+        run: test "$(go env GOOS)/$(go env GOARCH)" = '${{ matrix.target }}'
+
+      - name: Validate plugin package and local catalog
+        run: python3 scripts/release/check-plugin-package.py
+
+      - name: Test exact-source acquisition without provider access
+        run: bash scripts/release/test-acquire-gh-steward.sh
+
+      - name: Run provider-free unit tests
+        env:
+          GOPROXY: off
+        run: go test ./...
+
+      - name: Run provider-free race tests
+        env:
+          GOPROXY: off
+        run: go test -race ./...
+
+      - name: Run static analysis
+        env:
+          GOPROXY: off
+        run: go vet ./...
+
+      - name: Run bounded queue-ranking benchmark
+        env:
+          GOPROXY: off
+        run: go test -run '^$' -bench '^BenchmarkLCSForLargeQueue$' -benchtime=1x -count=1 ./internal/planning
+
+      - name: Qualify supported cross-builds
+        if: matrix.target == 'linux/amd64'
+        env:
+          GOPROXY: off
+        run: scripts/release/check-build-matrix.sh

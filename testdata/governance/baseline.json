@@ -1,0 +1,126 @@
+{
+  "label_policy": {
+    "labels": [
+      {"name": "task", "semantic_role": "work", "platform_owner": "repo-managed", "governance_controlled": true, "current_reference_color": "112233", "target_color": "0055aa", "description": "Task work", "notes": "managed by this repository"},
+      {"name": "feature", "semantic_role": "capability", "platform_owner": "repo-managed", "governance_controlled": false, "current_reference_color": "00aa55", "target_color": "00AA55", "description": "Feature work", "notes": ""},
+      {"name": "maintenance", "semantic_role": "upkeep", "platform_owner": "repo-managed", "governance_controlled": true, "current_reference_color": "774411", "target_color": "AA7744", "description": "Maintenance work", "notes": "managed by this repository"},
+      {"name": "bug", "semantic_role": "defect", "platform_owner": "github-default", "governance_controlled": true, "current_reference_color": "FF0000", "target_color": "FF0000", "description": "Bug report", "notes": "platform-owned"},
+      {"name": "question", "semantic_role": "discussion", "platform_owner": "github-default", "governance_controlled": false, "current_reference_color": "663399", "target_color": "663399", "description": "Question", "notes": "platform-owned"}
+    ]
+  },
+  "label_snapshot": {
+    "labels": [
+      {"name": "task", "color": "112233", "description": "Old task description", "default": false},
+      {"name": "feature", "color": "#00aa55", "description": "Feature work", "default": false},
+      {"name": "bug", "color": "00FF00", "description": "Bug report", "default": true}
+    ]
+  },
+  "governance_policy": {
+    "prefix_labels": {"Bug": "bug", "Feature": "feature", "Task": "task"},
+    "retired_labels": ["legacy", "old-label"],
+    "status_field": "Workflow",
+    "valid_statuses": ["Backlog", "Active", "Complete"],
+    "priority_field": "Rank",
+    "valid_priorities": ["Urgent", "Soon", "Later"]
+  },
+  "governance_snapshot": {
+    "generated_at": "2026-10-04T17:00:00Z",
+    "repo": {"nameWithOwner": "sample-org/sample-project"},
+    "project": {"id": "PVT_example", "number": 7},
+    "issues": [
+      {"number": 1, "title": "Bug: stale labels", "url": "https://github.com/sample-org/sample-project/issues/1", "state": "OPEN", "labels": ["legacy", "feature"], "in_project": true, "field_values": {"Workflow": "Unknown", "Rank": "Urgent"}},
+      {"number": 2, "title": "Untyped title", "url": "https://github.com/sample-org/sample-project/issues/2", "state": "OPEN", "labels": ["old-label"], "in_project": false, "field_values": {"Workflow": "Backlog", "Rank": "Soon"}},
+      {"number": 3, "title": "Feature: no membership", "url": "https://github.com/sample-org/sample-project/issues/3", "state": "OPEN", "labels": [], "in_project": false, "field_values": {"Workflow": null, "Rank": null}}
+    ]
+  },
+  "milestone_policy": {
+    "current_milestone": "2026 Q4",
+    "next_milestone": "2027 Q1",
+    "quarter_milestones": ["2026 Q3", "2026 Q4", "2027 Q1"],
+    "expected_milestones": [
+      {"title": "2026 Q4", "due_on": "2026-12-31T23:59:59Z", "description_prefixes": ["Quarter: 2026 Q4", "Date range: 2026-10-01 through 2026-12-31"], "description_tokens": ["Quarter goals:", "Active initiatives:", "Use only for issues explicitly committed to this quarter.", "Record quarter rationale in the issue body or a maintainer comment."]},
+      {"title": "2027 Q1", "due_on": "2027-03-31T23:59:59Z", "description_prefixes": ["Quarter: 2027 Q1", "Date range: 2027-01-01 through 2027-03-31"], "description_tokens": ["Quarter goals:", "Active initiatives:", "Use only for issues explicitly committed to this quarter.", "Record quarter rationale in the issue body or a maintainer comment."]}
+    ],
+    "epic_prefixes": ["Epic"],
+    "priority_field": "Rank",
+    "later_priority": "Later",
+    "rationale_markers": ["quarter commitment rationale", "quarter milestone target"]
+  },
+  "milestone_snapshot": {
+    "generated_at": "2026-10-04T17:00:00Z",
+    "repo": {"nameWithOwner": "sample-org/sample-project"},
+    "project": {"id": "PVT_example", "number": 7},
+    "milestones": [
+      {"title": "2026 Q3", "due_on": "2026-09-30T23:59:59Z", "description": "retired quarter", "open_issues": 0},
+      {"title": "2026 Q4", "due_on": "2026-12-01T00:00:00Z", "description": "old description", "open_issues": 2}
+    ],
+    "issues": [
+      {"number": 41, "title": "Epic: Quarterly umbrella", "state": "OPEN", "milestone": "2026 Q4", "body": "No rationale here", "comments": [], "child_numbers": [44], "field_values": {"Rank": "Later"}},
+      {"number": 42, "title": "Task: Quarterly work", "state": "OPEN", "milestone": "2026 Q4", "body": "Quarter commitment rationale: finish the reviewed plan", "comments": [], "child_numbers": [], "field_values": {"Rank": "Urgent"}}
+    ]
+  },
+  "preflight_policy": {"intent": "finish", "merge_methods": {"default_base": "squash", "stacked": "merge"}},
+  "preflight_snapshot": {
+    "generated_at": "2026-10-04T17:00:00Z",
+    "repo": {"nameWithOwner": "sample-org/sample-project", "defaultBranch": "main"},
+    "git": {"current_branch": "topic/work", "head_commit": "abcdef0123456789", "worktree_entries": ["?? scratch.txt"]},
+    "active_issue_branches": ["issue-41", "issue-42"],
+    "issue": {"number": 41, "title": "Epic: Quarterly umbrella"},
+    "pull_request": {"number": 21, "head_branch": "topic/work", "base_branch": "release/2026"}
+  },
+  "transition_policy": {"statuses": {"done": "Complete", "active": "Active", "todo": "Backlog"}},
+  "transition_snapshot": {
+    "generated_at": "2026-10-04T17:00:00Z",
+    "issue": {"number": 41, "title": "Epic: Quarterly umbrella", "url": "https://github.com/sample-org/sample-project/issues/41"},
+    "pull_request": {"number": 21, "state": "CLOSED", "is_merged": false, "is_draft": false, "head_branch": "topic/work"},
+    "branch_exists": true
+  },
+  "link_policy": {"linked_issue_marker_prefix": "<!-- execution-linked-issue:", "link_state_marker_prefix": "<!-- execution-link-state:"},
+  "link_snapshot": {
+    "issue_number": 41,
+    "default_branch": "main",
+    "pull_request": {"number": 21, "base_branch": "main", "body": "Issue: #41\nCloses #41\n<!-- execution-linked-issue:41 -->\nLink state: auto-link-expected\n<!-- execution-link-state:auto-link-expected -->", "closing_issue_numbers": [41]}
+  },
+  "merge_policy": {
+    "workflow_name": "CI",
+    "workflow_event": "pull_request",
+    "required_label": "auto-merge",
+    "branch_patterns": ["automation/*"],
+    "trusted_logins": ["service[bot]"],
+    "pass_bucket": "pass",
+    "merge_method": "squash"
+  },
+  "merge_snapshot": {
+    "repository": {"nameWithOwner": "sample-org/sample-project", "defaultBranch": "main"},
+    "event": {"workflow_run": {"id": 9001, "name": "CI", "event": "pull_request", "status": "completed", "conclusion": "success", "head_branch": "automation/example", "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "repository": {"full_name": "sample-org/sample-project"}, "pull_requests": [{"number": 42, "head": {"ref": "automation/example", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]}},
+    "pull_request": {"number": 42, "repository": "sample-org/sample-project", "author": {"login": "human", "is_bot": false}, "baseRefName": "main", "headRefName": "automation/example", "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "isDraft": false, "labels": [{"name": "auto-merge"}], "mergeStateStatus": "CLEAN", "reviewDecision": "APPROVED", "state": "OPEN", "title": "Reviewed automation change", "url": "https://github.com/sample-org/sample-project/pull/42"},
+    "required_checks": [{"bucket": "pass", "name": "unit", "state": "pass", "workflow": "CI"}, {"bucket": "pass", "name": "build", "state": "pass", "workflow": "CI"}]
+  },
+  "recovery_policy": {"expected_event": "pull_request_target", "expected_workflow_path": ".github/workflows/execution_state_sync.yml", "expected_phase": "issue_resolution_before_project_sync", "artifact_name": "execution-state"},
+  "recovery_snapshot": {
+    "attestation": {"repository": "sample-org/sample-project", "pr_number": 42, "run_id": 100, "run_attempt": 1, "job_id": 200, "artifact_id": 300, "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "artifact_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "sentinel_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "log_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "phase": "issue_resolution_before_project_sync", "review": "review #37"},
+    "run": {"id": 100, "run_attempt": 1, "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "event": "pull_request_target", "status": "completed", "conclusion": "failure", "path": ".github/workflows/execution_state_sync.yml", "head_repository": {"full_name": "sample-org/sample-project"}, "pull_requests": [{"number": 42, "base": {"sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]},
+    "artifact_listing": {"artifacts": [{"id": 300, "name": "execution-state", "expired": false, "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]},
+    "artifact_files": {"complete": true, "root_is_symlink": false, "entries": [{"path": "recovery-state.json", "kind": "file", "symlink": false, "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}]},
+    "sentinel": {"schema_version": 1, "state": "unknown_project_writes"},
+    "log_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "log_is_symlink": false
+  },
+  "summary_policy": {
+    "report_sections": [{"key": "audit", "label": "Backlog audit"}],
+    "guidance": {"report_key": "audit", "heading": "## Reconcile next step", "preview_instruction": "preview first", "apply_instruction": "apply only after reviewing the preview", "workflow_link": "https://example.invalid/workflow", "workflow_label": "reconciliation workflow", "guide_link": "https://example.invalid/guide", "guide_label": "operator guide"}
+  },
+  "summary_snapshot": {
+    "event_name": "schedule",
+    "project_access": true,
+    "safe_fixes_enabled": true,
+    "drift_issue_enabled": false,
+    "token_source": "automation token",
+    "project_title": "Sample backlog",
+    "project_number": "7",
+    "quarter_rollover_clean": false,
+    "pre_reports": {"audit": {"summary": {"finding_count": 1, "error_count": 0, "fixable_count": 1}}},
+    "post_reports": {"audit": {"summary": {"finding_count": 1, "error_count": 0, "fixable_count": 1}, "findings": [{"code": "stale-label", "message": "Managed label needs an update", "number": 19}]}},
+    "fix_result": {"summary": {"applied_count": 0, "failed_count": 0}}
+  }
+}

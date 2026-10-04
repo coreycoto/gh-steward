@@ -1,0 +1,135 @@
+name: Release gh-steward
+
+on:
+  push:
+    tags:
+      - v*
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gh-steward-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: Qualify ${{ matrix.target }}
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux/amd64
+          - runner: ubuntu-24.04-arm
+            target: linux/arm64
+          - runner: macos-15-intel
+            target: darwin/amd64
+          - runner: macos-15
+            target: darwin/arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Check out the exact release candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up pinned native Go toolchain
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: 1.27.1
+          cache-dependency-path: go.sum
+
+      - name: Verify source and native target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$(go env GOOS)/$(go env GOARCH)" = '${{ matrix.target }}'
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Validate portable package
+        run: python3 scripts/release/check-plugin-package.py
+
+      - name: Test exact-source acquisition without provider access
+        run: bash scripts/release/test-acquire-gh-steward.sh
+
+      - name: Qualify native journal and workflow behavior
+        env:
+          GOPROXY: off
+        run: go test ./...
+
+      - name: Qualify native race behavior
+        env:
+          GOPROXY: off
+        run: go test -race ./...
+
+      - name: Run static analysis
+        env:
+          GOPROXY: off
+        run: go vet ./...
+
+      - name: Run bounded queue-ranking benchmark
+        env:
+          GOPROXY: off
+        run: go test -run '^$' -bench '^BenchmarkLCSForLargeQueue$' -benchtime=1x -count=1 ./internal/planning
+
+      - name: Qualify supported cross-builds
+        if: matrix.target == 'linux/amd64'
+        env:
+          GOPROXY: off
+        run: scripts/release/check-build-matrix.sh
+
+  release:
+    needs: qualify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Check out the event's exact tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up pinned Go toolchain
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: 1.27.1
+          cache-dependency-path: go.sum
+
+      - name: Verify tag identity and clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-parse "${GITHUB_REF_NAME}^{commit}")"
+          test "$tag_commit" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Validate portable plugin package
+        run: python3 scripts/release/check-plugin-package.py
+
+      - name: Build and publish the pinned GitHub CLI extension release
+        uses: cli/gh-extension-precompile@76961aa3bd1123d0a6fd42d0a41aca0696937c39 # v2.2.0
+        with:
+          go_version: 1.27.1
+          release_tag: ${{ github.ref_name }}
+          build_script_override: scripts/release/build-gh-extension.sh
+          generate_attestations: true

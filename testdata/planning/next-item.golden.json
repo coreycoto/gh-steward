@@ -1,0 +1,14 @@
+{
+  "repo": {"host":"github.com","owner":"sample-org","name":"sample-project","nameWithOwner":"sample-org/sample-project","url":"https://github.com/sample-org/sample-project"},
+  "project": {"id":"PVT_sample","number":7,"title":"Roadmap","owner_login":"sample-org","url":"https://github.com/users/sample-org/projects/7"},
+  "generated_at":"2026-01-01T00:00:00Z",
+  "all_now_blocked":false,
+  "selected_band":"Now",
+  "selected":{"number":1,"title":"Task: Foundation","priority":"Now","queue_order":10.5,"blocked_by_numbers":[],"actionable_child_numbers":[]},
+  "candidate":{"number":2,"title":"Task: Follow-up","prefix":"Task","priority":"Now","queue_order":20,"reason":"blocked","recommended_issue":null},
+  "candidate_is_selected":false,
+  "decisions":[
+    {"number":1,"title":"Task: Foundation","priority":"Now","queue_order":10.5,"reason":"actionable","blocked_by_numbers":[],"actionable_child_numbers":[]},
+    {"number":2,"title":"Task: Follow-up","priority":"Now","queue_order":20,"reason":"blocked","blocked_by_numbers":[1],"actionable_child_numbers":[]}
+  ]
+}
