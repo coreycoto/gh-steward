@@ -3,6 +3,7 @@
 ## 0.2.1 — Unreleased
 
 - Fix Project fields and items query selections so each field remains a separate GraphQL selection.
+- Align workflow Project-field checks with normalized types and named option identities.
 
 ## 0.2.0 — 2026-10-04
 

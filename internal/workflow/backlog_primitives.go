@@ -68,7 +68,10 @@ func validateProjectField(project contract.Object, name string, value ProjectFie
 	if err != nil {
 		return fmt.Errorf("review Project is missing %q field definition", name)
 	}
-	kind, err := contract.Nonempty(def, "dataType")
+	if err := validateProjectFieldInventory(project); err != nil {
+		return fmt.Errorf("review Project field inventory is invalid: %w", err)
+	}
+	kind, err := contract.Nonempty(def, "data_type")
 	if err != nil {
 		return err
 	}
@@ -89,17 +92,11 @@ func validateProjectField(project contract.Object, name string, value ProjectFie
 		if kind != "SINGLE_SELECT" {
 			return fmt.Errorf("Project field %q must be a single-select field", name)
 		}
-		options, err := contract.Objects(def, "options")
+		options, err := contract.ObjectAt(def, "options_by_name")
 		if err != nil {
 			return err
 		}
-		found := false
-		for _, opt := range options {
-			if opt["name"] == *value.Text {
-				found = true
-			}
-		}
-		if !found {
+		if _, found := options[*value.Text]; !found {
 			return fmt.Errorf("Project field %q does not define option %q", name, *value.Text)
 		}
 	}

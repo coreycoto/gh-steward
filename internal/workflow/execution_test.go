@@ -86,7 +86,9 @@ func executionTestRawInventory(policy ExecutionPolicy, selector ExecutionSelecto
 			"repo":    repo.Object(),
 			"project": contract.Object{"id": "PVT_backlog", "number": int64(1), "title": "Backlog", "owner_login": "example", "owner_type": "Organization", "host": "github.com"},
 			"fields_by_name": contract.Object{
-				"Status": contract.Object{"id": "FIELD_status", "dataType": "SINGLE_SELECT", "options": []any{contract.Object{"name": "Todo"}, contract.Object{"name": "In Progress"}, contract.Object{"name": "Done"}}},
+				"Status": contract.Object{"id": "FIELD_status", "name": "Status", "data_type": "SINGLE_SELECT", "options_by_name": contract.Object{
+					"Todo": contract.Object{"id": "OPT_status_todo", "name": "Todo"}, "In Progress": contract.Object{"id": "OPT_status_progress", "name": "In Progress"}, "Done": contract.Object{"id": "OPT_status_done", "name": "Done"},
+				}},
 			},
 			"items": []any{}, "generated_at": "2026-10-04T12:00:00Z",
 			"provenance": contract.Object{"live": true, "complete": true, "source": "github_project_api"},
