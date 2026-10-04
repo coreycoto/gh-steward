@@ -7,8 +7,12 @@ Use this skill when the user asks to prepare actionable review findings as backl
 
 Prepare with a structured `schema_version: 1` payload and explicit policy:
 
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+The prepare output is an envelope; extract its inner plan before review:
+
 ```sh
-gh steward review prepare --policy review-policy.json --input payload=review-findings.json --out reviewed-plan.json
+gh steward review prepare --repo-root . --repo "$REPOSITORY_URL" --policy review-policy.json --input payload=review-findings.json --out review-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=review-prepare.json --outer-command review-backlog-prepare --plan-command review-backlog-apply --out reviewed-plan.json
 ```
 
 The payload has a nonempty `findings` array. Each finding requires `title`, `summary`, `issue_type` (`Initiative`, `Epic`, `Research`, `Enhancement`, `Bug`, or `Maintenance`), and `severity` (`critical`, `high`, `now`, `medium`, `next`, `low`, or `later`). Optional grouping requires both `group_key` and `backlog_title`; optional fields include `body`, `files`, `evidence`, `existing_issue`, `notes`, `blocked_by_issue_numbers`, and `parent_issue_number`.

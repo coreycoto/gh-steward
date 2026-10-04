@@ -13,8 +13,12 @@ gh steward snapshot artifacts --input payload=run.json --out artifacts.json
 
 `run.json` contains exactly `run_id`. For deletion, create an authored payload with exactly `run_id`, `names` (nonempty, unique, exact case-sensitive names), and boolean `ignore_missing`, then prepare:
 
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+The prepare output is an envelope; extract its inner plan before review:
+
 ```sh
-gh steward artifacts prepare --input payload=artifact-selection.json --out reviewed-plan.json
+gh steward artifacts prepare --repo-root . --repo "$REPOSITORY_URL" --input payload=artifact-selection.json --out artifacts-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=artifacts-prepare.json --outer-command run-artifact-delete-prepare --plan-command artifacts-delete-apply --out reviewed-plan.json
 ```
 
 The plan captures every page of the live run inventory and includes one operation for each matching artifact ID. A name may match more than one artifact; review every ID. If `ignore_missing` is false, matching artifacts are still deleted when another requested name is absent; the tool emits the completed receipt and reports a nonzero outcome with the missing names. If true, missing names are recorded and do not make the result nonzero.

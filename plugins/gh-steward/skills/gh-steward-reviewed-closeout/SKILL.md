@@ -13,10 +13,13 @@ complete live source evidence. Build the review or epic-closeout summary with
 `gh steward review closeout-audit`. Inspect its findings, proposed follow-ups,
 epic identity, child and blocker evidence, and qualification verdict.
 
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+
 Prepare the reviewed workflow:
 
 ```sh
-gh steward closeout prepare --input summary=closeout-summary.json --policy closeout-policy.json --out reviewed-plan.json
+gh steward closeout prepare --repo-root . --repo "$REPOSITORY_URL" --input summary=closeout-summary.json --policy closeout-policy.json --out closeout-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=closeout-prepare.json --outer-command review-closeout-prepare --plan-command review-closeout-apply --out reviewed-plan.json
 ```
 
 The policy has exactly `review_backlog`, `governance_check`, and `backlog_audit`.

@@ -4,6 +4,7 @@
 
 - Fix Project fields and items query selections so each field remains a separate GraphQL selection.
 - Align workflow Project-field checks with normalized types and named option identities.
+- Add offline native plan extraction and validation, plus direct Go-plan registration for workflow recovery contexts.
 
 ## 0.2.0 — 2026-10-04
 

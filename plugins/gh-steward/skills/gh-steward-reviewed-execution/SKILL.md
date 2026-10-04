@@ -11,8 +11,11 @@ The `policy` object has exactly `statuses` (`done`, `active`, `todo`), `status_f
 
 Prepare from live state and inspect issue/PR identity, linked pull-request evidence, Project membership and status, comment markers, before-state, operations, and `sha256`:
 
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+
 ```sh
-gh steward execution prepare --input selector=selector.json --policy execution-policy.json --out reviewed-plan.json
+gh steward execution prepare --repo-root . --repo "$REPOSITORY_URL" --input selector=selector.json --policy execution-policy.json --out execution-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=execution-prepare.json --outer-command execution-prepare --plan-command execution-sync --out reviewed-plan.json
 ```
 
 Apply only after explicit approval of the exact plan:

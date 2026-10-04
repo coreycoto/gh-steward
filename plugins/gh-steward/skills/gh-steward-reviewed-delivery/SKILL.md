@@ -27,8 +27,11 @@ Prepare `payload.json` with exactly `kind` and `policy`:
   deleted require separate review. Server-owned automatic branch deletion is
   captured rather than changed implicitly.
 
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+
 ```sh
-gh steward delivery prepare --repo-root . --input payload=payload.json --out delivery-plan.json
+gh steward delivery prepare --repo-root . --repo "$REPOSITORY_URL" --input payload=payload.json --out delivery-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=delivery-prepare.json --outer-command delivery-prepare --plan-command delivery-apply --out delivery-plan.json
 ```
 
 Inspect the v2 plan's complete source identities, policy, before/after values

@@ -9,6 +9,17 @@ Use this skill when the user asks to review or change issue relationships. For b
 2. Read a complete live all-state issue graph with `gh steward snapshot issues --state all`. Preserve the exact repository identity and review the current dependency and hierarchy structure.
 3. Use user-authored relationship intent with `gh steward relationships audit`, `validate`, `plan`, or `prepare`. Provide hierarchy policy explicitly when the requested action needs it; never invent a policy or parent/child choice.
 4. For a native apply plan, run `gh steward relationships prepare` and inspect the exact repository, captured graph, source completeness, every operation's before/after relationships, cycle/identity constraints, and plan `sha256`. Offline or pure planning results are not live-qualified apply plans.
+
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+For native apply, the prepare output is an envelope; extract its inner plan:
+
+```sh
+gh steward relationships prepare --repo-root . --repo "$REPOSITORY_URL" --input payload=relationship-intent.json --out relationships-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=relationships-prepare.json --outer-command relationship-prepare --plan-command relationship-apply --out reviewed-plan.json
+```
+
+Add `--input hierarchy_policy=...` only when the requested relationship action needs explicit hierarchy policy.
+
 5. Apply only after explicit user approval of that exact plan:
 
    ```sh
