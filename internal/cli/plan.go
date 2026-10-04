@@ -16,36 +16,44 @@ import (
 // checkout or initialize the GitHub provider: callers supply the repository
 // identity and a complete, already-produced result envelope.
 func (r Runner) runPlan(args []string) error {
-	if len(args) == 0 || args[0] != "extract" {
-		return errors.New("plan supports only the extract action")
+	if len(args) == 0 {
+		return errors.New("plan requires extract or validate")
 	}
+	switch args[0] {
+	case "extract":
+		return r.runPlanExtract(args[1:])
+	case "validate":
+		return r.runPlanValidate(args[1:])
+	default:
+		return errors.New("plan supports only the extract and validate actions")
+	}
+}
+
+func (r Runner) runPlanExtract(args []string) error {
 	flags := flag.NewFlagSet("gh steward plan extract", flag.ContinueOnError)
 	flags.SetOutput(r.Err)
-	root := flags.String("repo-root", ".", "base directory for relative input and output paths")
+	root := flags.String("repo-root", "", "base directory for relative input and output paths")
 	repoURL := flags.String("repo", "", "exact repository HTTPS URL")
 	outerCommand := flags.String("outer-command", "", "expected CLI prepare envelope command")
 	planCommand := flags.String("plan-command", "", "expected inner plan command")
 	outPath := flags.String("out", "", "required canonical plan output file")
 	var declared inputsFlag
 	flags.Var(&declared, "input", "one named bounded JSON object: envelope=path; use envelope=- for stdin")
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	if *repoURL == "" || *outerCommand == "" || *planCommand == "" || *outPath == "" {
-		return errors.New("plan extract requires --repo, --outer-command, --plan-command and --out")
+	if *root == "" || *repoURL == "" || *outerCommand == "" || *planCommand == "" || *outPath == "" {
+		return errors.New("plan extract requires --repo-root, --repo, --outer-command, --plan-command and --out")
 	}
 	if strings.TrimSpace(*outerCommand) != *outerCommand || strings.TrimSpace(*planCommand) != *planCommand {
 		return errors.New("expected commands must not have surrounding whitespace")
 	}
-	if len(declared) != 1 {
-		return errors.New("plan extract requires exactly one --input envelope=FILE")
-	}
-	inputParts := strings.SplitN(declared[0], "=", 2)
-	if len(inputParts) != 2 || inputParts[0] != "envelope" || inputParts[1] == "" {
-		return errors.New("plan extract input must use envelope=path")
+	inputPath, err := namedPlanInput(declared, "envelope")
+	if err != nil {
+		return err
 	}
 
 	rootPath, err := resolvePlanRoot(*root)
@@ -56,7 +64,7 @@ func (r Runner) runPlan(args []string) error {
 	if err != nil {
 		return err
 	}
-	envelope, err := readPlanEnvelope(rootPath, inputParts[1], r.Input)
+	envelope, err := readPlanInput(rootPath, inputPath, r.Input)
 	if err != nil {
 		return fmt.Errorf("envelope: %w", err)
 	}
@@ -80,6 +88,62 @@ func (r Runner) runPlan(args []string) error {
 			"plan_sha256":  plan.SHA256,
 			"plan_command": plan.Command,
 			"path":         filepath.Clean(path),
+		},
+	})
+}
+
+func (r Runner) runPlanValidate(args []string) error {
+	flags := flag.NewFlagSet("gh steward plan validate", flag.ContinueOnError)
+	flags.SetOutput(r.Err)
+	root := flags.String("repo-root", "", "base directory for relative input paths")
+	repoURL := flags.String("repo", "", "exact repository HTTPS URL")
+	planCommand := flags.String("plan-command", "", "expected inner plan command")
+	var declared inputsFlag
+	flags.Var(&declared, "input", "one named bounded JSON object: plan=path; use plan=- for stdin")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
+	}
+	if *root == "" || *repoURL == "" || *planCommand == "" {
+		return errors.New("plan validate requires --repo-root, --repo and --plan-command")
+	}
+	if strings.TrimSpace(*planCommand) != *planCommand {
+		return errors.New("expected plan command must not have surrounding whitespace")
+	}
+	inputPath, err := namedPlanInput(declared, "plan")
+	if err != nil {
+		return err
+	}
+	rootPath, err := resolvePlanRoot(*root)
+	if err != nil {
+		return err
+	}
+	repository, err := parsePlanRepositoryURL(*repoURL)
+	if err != nil {
+		return err
+	}
+	planObject, err := readPlanInput(rootPath, inputPath, r.Input)
+	if err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
+	plan, err := contract.ParsePlan(planObject)
+	if err != nil {
+		return err
+	}
+	if plan.Command != *planCommand || plan.Repository != repository {
+		return errors.New("reviewed plan targets another command or repository")
+	}
+	return r.write(contract.Object{
+		"schema_version": 2,
+		"tool_version":   Version,
+		"command":        "plan-validate",
+		"repository":     repository.Object(),
+		"data": contract.Object{
+			"plan_sha256":     plan.SHA256,
+			"plan_command":    plan.Command,
+			"operation_count": len(plan.Operations),
 		},
 	})
 }
@@ -115,7 +179,18 @@ func parsePlanRepositoryURL(raw string) (contract.Repository, error) {
 	})
 }
 
-func readPlanEnvelope(root, input string, stdin io.Reader) (contract.Object, error) {
+func namedPlanInput(declared inputsFlag, expected string) (string, error) {
+	if len(declared) != 1 {
+		return "", fmt.Errorf("plan command requires exactly one --input %s=FILE", expected)
+	}
+	parts := strings.SplitN(declared[0], "=", 2)
+	if len(parts) != 2 || parts[0] != expected || parts[1] == "" {
+		return "", fmt.Errorf("plan command input must use %s=path", expected)
+	}
+	return parts[1], nil
+}
+
+func readPlanInput(root, input string, stdin io.Reader) (contract.Object, error) {
 	if input == "-" {
 		if stdin == nil {
 			return nil, errors.New("stdin is unavailable")

@@ -127,6 +127,11 @@ func TestPlanExtractRejectsInvalidEnvelopesAndPreservesOutput(t *testing.T) {
 		{name: "outer command mismatch", input: mustCanonical(t, baseEnvelope), outer: "merge-prepare"},
 		{name: "inner command mismatch", input: mustCanonical(t, planWithDifferentCommand)},
 		{name: "plan repository mismatch", input: mustCanonical(t, planRepositoryMismatch)},
+		{name: "explicit repository mismatch", input: mustCanonical(t, baseEnvelope), repo: otherRepository.URL},
+		{name: "unsupported plan field", input: mustCanonical(t, withPlanField(t, baseEnvelope, "extra", true))},
+		{name: "incomplete source evidence", input: mustCanonical(t, withPlanSource(t, baseEnvelope, "complete", false))},
+		{name: "invalid capture date", input: mustCanonical(t, withPlanField(t, baseEnvelope, "captured_at", "2026-10-04T12:00:00"))},
+		{name: "stale plan hash", input: mustCanonical(t, withPlanField(t, baseEnvelope, "sha256", strings.Repeat("b", 64)))},
 		{name: "tampered signed data", input: mustCanonical(t, tamperPlanData(t, baseEnvelope))},
 		{name: "duplicate json key", input: []byte(`{"schema_version":2,"schema_version":2}`)},
 		{name: "multiple json documents", input: append(mustCanonical(t, baseEnvelope), []byte(` {}`)...)},
@@ -173,6 +178,138 @@ func TestPlanExtractRejectsInvalidEnvelopesAndPreservesOutput(t *testing.T) {
 				t.Fatalf("rejected input changed existing output: bytes=%q err=%v", got, readErr)
 			}
 		})
+	}
+}
+
+func TestPlanValidatePreservesSignedJSONAndNeverWritesFiles(t *testing.T) {
+	root := t.TempDir() // Deliberately not a Git checkout or provider workspace.
+	repository, plan := planExtractionFixture(t, "example", "widgets", "execution-sync")
+	plan.Data["numbers"] = []any{json.Number("1e-7"), json.Number("-0"), json.Number("123456789012345678901234567890")}
+	plan, err := contract.PreparePlan(plan.Command, repository, plan.Sources, plan.Data, nil, time.Date(2026, 10, 4, 12, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	planBytes := mustCanonical(t, plan.Object())
+	planPath := filepath.Join(root, "standalone-plan.json")
+	contextPath := filepath.Join(root, "context.json")
+	contextBefore := []byte("context remains unchanged\n")
+	if err := os.WriteFile(planPath, planBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(contextPath, contextBefore, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err = (Runner{Out: &stdout, Err: &stderr}).Run(context.Background(), []string{
+		"plan", "validate", "--repo-root", root, "--repo", repository.URL,
+		"--input", "plan=standalone-plan.json", "--plan-command", "execution-sync",
+	})
+	if err != nil {
+		t.Fatal(err, stderr.String())
+	}
+	if got := mustReadFile(t, planPath); !bytes.Equal(got, planBytes) {
+		t.Fatalf("plan validate rewrote its input: got %s, want %s", got, planBytes)
+	}
+	if got := mustReadFile(t, contextPath); !bytes.Equal(got, contextBefore) {
+		t.Fatalf("plan validate changed context: got %s", got)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("validation created an unexpected file: entries=%v err=%v", entries, err)
+	}
+	result, err := contract.Decode(&stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := contract.ObjectAt(result, "data")
+	if err != nil || result["command"] != "plan-validate" || data["plan_sha256"] != plan.SHA256 || data["plan_command"] != plan.Command || data["operation_count"] != json.Number("0") {
+		t.Fatalf("unexpected plan validation result: %#v (%v)", result, err)
+	}
+}
+
+func TestPlanValidateRejectsInvalidPlansAndPreservesAllFiles(t *testing.T) {
+	root := t.TempDir()
+	repository, plan := planExtractionFixture(t, "example", "widgets", "execution-sync")
+	_, otherPlan := planExtractionFixture(t, "another", "widgets", "execution-sync")
+	tests := []struct {
+		name      string
+		input     []byte
+		repo      string
+		command   string
+		inputArgs []string
+	}{
+		{name: "unsupported field", input: mustCanonical(t, withField(t, plan.Object(), "extra", true))},
+		{name: "wrong schema", input: mustCanonical(t, withPlanField(t, plan.Object(), "schema_version", int64(1)))},
+		{name: "incomplete source", input: mustCanonical(t, withPlanSource(t, plan.Object(), "complete", false))},
+		{name: "invalid capture time", input: mustCanonical(t, withPlanField(t, plan.Object(), "captured_at", "2026-10-04T12:00:00"))},
+		{name: "stale digest", input: mustCanonical(t, withPlanField(t, plan.Object(), "sha256", strings.Repeat("b", 64)))},
+		{name: "tampered signed data", input: mustCanonical(t, tamperPlanObject(t, plan.Object()))},
+		{name: "invalid explicit repository URL", input: mustCanonical(t, plan.Object()), repo: "http://github.com/example/widgets"},
+		{name: "expected command mismatch", input: mustCanonical(t, plan.Object()), command: "other-command"},
+		{name: "valid plan from another repository", input: mustCanonical(t, otherPlan.Object())},
+		{name: "duplicate json key", input: []byte(`{"schema_version":2,"schema_version":2}`)},
+		{name: "multiple json documents", input: append(mustCanonical(t, plan.Object()), []byte(` {}`)...)},
+		{name: "wrong named input", input: mustCanonical(t, plan.Object()), inputArgs: []string{"--input", "envelope=plan.json"}},
+		{name: "mixed named inputs", input: mustCanonical(t, plan.Object()), inputArgs: []string{"--input", "plan=plan.json", "--input", "payload=extra.json"}},
+		{name: "unexpected output flag", input: mustCanonical(t, plan.Object()), inputArgs: []string{"--input", "plan=plan.json", "--out", "unexpected.json"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			planPath := filepath.Join(root, "plan.json")
+			contextPath := filepath.Join(root, "context.json")
+			contextBefore := []byte("preserve context bytes\n")
+			if err := os.WriteFile(planPath, tc.input, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(contextPath, contextBefore, 0600); err != nil {
+				t.Fatal(err)
+			}
+			planCommand := tc.command
+			if planCommand == "" {
+				planCommand = "execution-sync"
+			}
+			inputArgs := tc.inputArgs
+			if inputArgs == nil {
+				inputArgs = []string{"--input", "plan=plan.json"}
+			}
+			repoURL := tc.repo
+			if repoURL == "" {
+				repoURL = repository.URL
+			}
+			args := []string{"plan", "validate", "--repo-root", root, "--repo", repoURL}
+			args = append(args, inputArgs...)
+			args = append(args, "--plan-command", planCommand)
+			var stdout, stderr bytes.Buffer
+			err := (Runner{Out: &stdout, Err: &stderr}).Run(context.Background(), args)
+			if err == nil || stdout.Len() != 0 {
+				t.Fatalf("invalid plan succeeded: err=%v stdout=%q", err, stdout.String())
+			}
+			if got := mustReadFile(t, planPath); !bytes.Equal(got, tc.input) {
+				t.Fatalf("rejected plan input changed: got %s, want %s", got, tc.input)
+			}
+			if got := mustReadFile(t, contextPath); !bytes.Equal(got, contextBefore) {
+				t.Fatalf("rejected plan changed context: got %s", got)
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil || len(entries) != 2 {
+				t.Fatalf("rejected plan created an unexpected file: entries=%v err=%v", entries, err)
+			}
+		})
+	}
+}
+
+func TestPlanCommandsAreDocumentedInCLIHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := (Runner{Out: &stdout, Err: &stderr}).Run(context.Background(), []string{"help"}); err != nil {
+		t.Fatal(err, stderr.String())
+	}
+	for _, command := range []string{
+		"gh steward plan extract --repo-root PATH --repo HTTPS_URL --input envelope=FILE --outer-command COMMAND --plan-command COMMAND --out FILE",
+		"gh steward plan validate --repo-root PATH --repo HTTPS_URL --input plan=FILE --plan-command COMMAND",
+	} {
+		if !strings.Contains(stdout.String(), command) {
+			t.Errorf("CLI help omits %q", command)
+		}
 	}
 }
 
@@ -259,6 +396,59 @@ func tamperPlanData(t *testing.T, value contract.Object) contract.Object {
 		t.Fatal(err)
 	}
 	planData["intent"] = "tampered"
+	return copy
+}
+
+func tamperPlanObject(t *testing.T, value contract.Object) contract.Object {
+	t.Helper()
+	copy, err := contract.Clone(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := contract.ObjectAt(copy, "data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data["intent"] = "tampered"
+	return copy
+}
+
+func withPlanField(t *testing.T, value contract.Object, key string, field any) contract.Object {
+	t.Helper()
+	copy, err := contract.Clone(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := contract.ObjectAt(copy, "data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan[key] = field
+	return copy
+}
+
+func withPlanSource(t *testing.T, value contract.Object, key string, field any) contract.Object {
+	t.Helper()
+	copy, err := contract.Clone(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := copy
+	if _, exists := plan["sources"]; !exists {
+		plan, err = contract.ObjectAt(copy, "data")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	sources, err := contract.ObjectAt(plan, "sources")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := contract.ObjectAt(sources, "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source[key] = field
 	return copy
 }
 
