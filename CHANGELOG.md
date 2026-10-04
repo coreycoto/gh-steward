@@ -6,6 +6,7 @@
 - Require a durable publication qualification bound to the exact trusted workflow, candidate bytes, successful verification job, and immutable artifact identities before publication recovery can advance.
 - Add current-run zero-operation receipts that require an exact reviewed workflow source and positive skipped evidence for every declared mutation step, preserving every raw planning document for preview-only runs. Historical ambiguous attempts stay held.
 - Preserve exact native plans, completed operation receipts, and original source proofs across isolated jobs. Keep unknown writes subject to the apply engine's positive reconciliation.
+- Retain bounded pending work across repeated interruptions when the current workflow source and named mutation steps positively prove no dispatch. Resume exact saved journal progress and close pending work only with an actual terminal observer receipt; historical unknown attempts remain held.
 - Add a focused portable workflow-recovery skill. Consumer policy remains declarative; shared recovery logic lives in Go.
 
 ## 0.1.0 — 2026-10-04

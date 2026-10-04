@@ -192,7 +192,7 @@ func (e *Engine) validateRestoredHandoff(ctx context.Context, reader ActionsRead
 	if err != nil {
 		return err
 	}
-	inspected, err := e.inspectHistoricalPackage(ctx, reader, inv, runs, sourceRun, target, artifact, attempt, payload)
+	inspected, err := e.inspectHistoricalPackage(ctx, reader, inv, runs, sourceRun, target, artifact, attempt, payload, false)
 	if err != nil {
 		return err
 	}

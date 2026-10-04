@@ -19,6 +19,7 @@ var (
 	}
 	runContextOptionalFields = []string{
 		"trusted_source_sha", "recovered_from_run_id", "recovered_from_attempt",
+		"plan_origin_run_id", "plan_origin_attempt",
 		"blocked_reason", "branch_cleanup_outcome", "parent_merge", "publication",
 	}
 	runContextPlanRequiredFields = []string{"name", "path", "command", "sha256", "journal_id", "status"}
@@ -170,7 +171,8 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	if sourceContext["phase"] != "dispatching" && sourceContext["publication"] == nil {
+	preparedSource := source["prepared_qualification"] != nil
+	if !preparedSource && sourceContext["phase"] != "dispatching" && sourceContext["publication"] == nil {
 		return nil, recoveryError("observer source is not an interrupted native attempt")
 	}
 	if err := e.validateRunContext(sourceContext); err != nil {
@@ -221,13 +223,35 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 		}, sourceContext, false); err != nil {
 			return nil, recoveryError("publication source proof is invalid: %v", err)
 		}
+	} else if preparedSource {
+		if sourceContext["publication"] != nil || (sourceContext["phase"] != "prepared" && sourceContext["phase"] != "dispatching") {
+			return nil, recoveryError("qualified prepared source has an unsupported observer phase")
+		}
+		target, err := TargetObject(workflow, e.repository.URL, mustPositive(sourceRun["workflow_id"]), "workflow-history-v2")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := e.validatePreparedSourceRecord(source, target); err != nil {
+			return nil, recoveryError("prepared observer source proof is invalid: %v", err)
+		}
+		retainedPlans := make([]Object, 0, len(plans))
+		for _, rawPlan := range plans {
+			proof, err := Exact(rawPlan, preparedPlanFields, "prepared source native plan proof")
+			if err != nil {
+				return nil, err
+			}
+			retainedPlans = append(retainedPlans, proof)
+		}
+		if err := e.validateRetainedPlanPolicyFiles(sourceContext, retainedPlans, policyFiles); err != nil {
+			return nil, recoveryError("prepared observer source policy evidence is invalid: %v", err)
+		}
 	} else {
 		if len(plans) == 0 || sourceContext["phase"] != "dispatching" {
 			return nil, recoveryError("native observer source lacks its exact interrupted plan inventory")
 		}
 		retainedPlans := make([]Object, 0, len(plans))
 		for _, rawPlan := range plans {
-			proof, err := Exact(rawPlan, []string{"name", "command", "plan_sha256", "journal_id", "plan_file", "journal_file"}, "source native plan proof")
+			proof, err := exactWithOptional(rawPlan, []string{"name", "command", "plan_sha256", "journal_id", "plan_file", "journal_file"}, []string{"apply_result_file"}, "source native plan proof")
 			if err != nil {
 				return nil, err
 			}
@@ -241,8 +265,9 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 			return nil, err
 		}
 		persistedDispatches := 0
+		unstartedPlans := 0
 		for index, rawPlan := range plans {
-			proof, err := Exact(rawPlan, []string{"name", "command", "plan_sha256", "journal_id", "plan_file", "journal_file"}, "source native plan proof")
+			proof, err := exactWithOptional(rawPlan, []string{"name", "command", "plan_sha256", "journal_id", "plan_file", "journal_file"}, []string{"apply_result_file"}, "source native plan proof")
 			if err != nil {
 				return nil, err
 			}
@@ -276,7 +301,17 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 				return nil, recoveryError("restored native plan differs from its immutable source proof")
 			}
 			journalProof := proof["journal_file"]
-			if journalProof == nil {
+			if entry["status"] == "completed" {
+				if journalProof == nil || proof["apply_result_file"] == nil {
+					return nil, recoveryError("completed parent source lost its exact terminal receipt")
+				}
+				if _, err := ValidateTerminalPlanProof(proof); err != nil {
+					return nil, recoveryError("completed parent source receipt is invalid: %v", err)
+				}
+			} else if journalProof == nil {
+				if proof["apply_result_file"] != nil {
+					return nil, recoveryError("unstarted source plan contains an unbound apply result")
+				}
 				if entry["status"] != "prepared" {
 					return nil, recoveryError("started source plan lost its exact persisted native journal")
 				}
@@ -284,6 +319,7 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 				if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(journalPath))); !errors.Is(err, os.ErrNotExist) {
 					return nil, recoveryError("journal-free prepared source contains an unbound journal path")
 				}
+				unstartedPlans++
 			} else {
 				journalBytes, err := LoadRawFileProof(journalProof, "source native journal")
 				if err != nil {
@@ -306,12 +342,22 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 				if err != nil {
 					return nil, err
 				}
+				if dispatches == 0 {
+					return nil, recoveryError("unfinished source journal has no positive native dispatch receipt")
+				}
 				persistedDispatches += dispatches
 			}
 		}
 		if persistedDispatches == 0 {
 			return nil, recoveryError("source has no persisted native dispatch identity and cannot be resumed")
 		}
+		if unstartedPlans != 0 {
+			return nil, recoveryError("source mixes positive journal progress with an unstarted native plan")
+		}
+	}
+	planOriginRunID, planOriginAttempt, err := contextPlanOrigin(sourceContext, true)
+	if err != nil {
+		return nil, recoveryError("observer source does not preserve its immutable plan origin: %v", err)
 	}
 	if _, statErr := os.Lstat(filepath.Join(root, "run-context.json")); statErr == nil {
 		currentContext, err := e.readRunContext(root)
@@ -326,6 +372,10 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 		isSourceContext := exactInt(currentContext["workflow_run_id"], sourceRunID) && exactInt(currentContext["workflow_run_attempt"], sourceAttempt)
 		isObserverContext := exactInt(currentContext["workflow_run_id"], currentRunID) && exactInt(currentContext["workflow_run_attempt"], currentAttempt) &&
 			exactInt(currentContext["recovered_from_run_id"], sourceRunID) && exactInt(currentContext["recovered_from_attempt"], sourceAttempt)
+		if isObserverContext {
+			currentOriginRunID, currentOriginAttempt, originErr := contextPlanOrigin(currentContext, true)
+			isObserverContext = originErr == nil && currentOriginRunID == planOriginRunID && currentOriginAttempt == planOriginAttempt
+		}
 		if !isSourceContext && !isObserverContext {
 			return nil, recoveryError("existing context is neither the exact source nor its current observer")
 		}
@@ -333,7 +383,7 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 		return nil, recoveryError("existing observer context path is unsafe or unreadable: %v", statErr)
 	}
 	observerPhase := "dispatching"
-	if sourceContext["publication"] != nil {
+	if sourceContext["publication"] != nil || (preparedSource && sourceContext["phase"] == "prepared") {
 		observerPhase = "prepared"
 	}
 	observerContext := Object{
@@ -343,6 +393,7 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 		"attempt_target": sourceContext["attempt_target"], "phase": observerPhase,
 		"dispatch_steps": sourceContext["dispatch_steps"], "plans": sourceContext["plans"],
 		"recovered_from_run_id": sourceRunID, "recovered_from_attempt": sourceAttempt,
+		"plan_origin_run_id": planOriginRunID, "plan_origin_attempt": planOriginAttempt,
 	}
 	for _, field := range []string{"parent_merge", "branch_cleanup_outcome", "publication"} {
 		if value, exists := sourceContext[field]; exists {
@@ -721,7 +772,38 @@ func (e *Engine) InstallRestoredJournal(root, journalRoot, name string) (Object,
 		}
 	}
 	if sourcePlan == nil || sourcePlan["name"] != entry["name"] || sourcePlan["command"] != entry["command"] ||
-		sourcePlan["plan_sha256"] != entry["sha256"] || sourcePlan["journal_id"] != entry["journal_id"] || sourcePlan["journal_file"] == nil {
+		sourcePlan["plan_sha256"] != entry["sha256"] || sourcePlan["journal_id"] != entry["journal_id"] {
+		return nil, recoveryError("observer plan has no exact persisted source journal proof")
+	}
+	if source["prepared_qualification"] != nil && sourcePlan["journal_file"] == nil && sourcePlan["apply_result_file"] == nil {
+		if entry["status"] != "prepared" && entry["status"] != "dispatching" {
+			return nil, recoveryError("journal-free prepared source has an unsupported manifest status")
+		}
+		sourceRun, err := Exact(source["run"], immutableRunFields, "journal-free source run")
+		if err != nil {
+			return nil, err
+		}
+		target, err := TargetObject(fmt.Sprint(context["workflow_file"]), e.repository.URL, mustPositive(sourceRun["workflow_id"]), "workflow-history-v2")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := e.validatePreparedSourceRecord(source, target); err != nil {
+			return nil, recoveryError("journal-free source proof is invalid: %v", err)
+		}
+		packageJournal := filepath.Join(root, "journal", fmt.Sprint(entry["journal_id"])+".json")
+		if _, err := os.Lstat(packageJournal); !errors.Is(err, os.ErrNotExist) {
+			return nil, recoveryError("journal-free source package contains unbound native progress")
+		}
+		enginePath, err := confinedRootFile(journalRoot, fmt.Sprint(entry["journal_id"])+".json")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := os.Lstat(enginePath); !errors.Is(err, os.ErrNotExist) {
+			return nil, recoveryError("native engine already has progress absent from the exact source proof")
+		}
+		return Object{"outcome": "no-journal-required", "journal_id": entry["journal_id"]}, nil
+	}
+	if sourcePlan["journal_file"] == nil {
 		return nil, recoveryError("observer plan has no exact persisted source journal proof")
 	}
 	plan, err := e.loadContextPlan(root, context, entry)
@@ -761,7 +843,7 @@ func (e *Engine) InstallRestoredJournal(root, journalRoot, name string) (Object,
 	}
 	retainedPlans := make([]Object, 0, len(sourcePlanProofs))
 	for _, raw := range sourcePlanProofs {
-		proof, err := Exact(raw, []string{"name", "command", "plan_sha256", "journal_id", "plan_file", "journal_file"}, "source native plan proof")
+		proof, err := exactWithOptional(raw, []string{"name", "command", "plan_sha256", "journal_id", "plan_file", "journal_file"}, []string{"apply_result_file"}, "source native plan proof")
 		if err != nil {
 			return nil, err
 		}
@@ -1001,6 +1083,22 @@ func (e *Engine) validateRunContext(context Object) error {
 			return recoveryError("run context has an incomplete recovery source identity")
 		}
 	}
+	_, originRunPresent := context["plan_origin_run_id"]
+	_, originAttemptPresent := context["plan_origin_attempt"]
+	if originRunPresent || originAttemptPresent {
+		if !positiveInt(context["recovered_from_run_id"]) || !positiveInt(context["recovered_from_attempt"]) ||
+			!positiveInt(context["plan_origin_run_id"]) || !positiveInt(context["plan_origin_attempt"]) {
+			return recoveryError("run context has an incomplete or non-recovered plan origin identity")
+		}
+		if exactInt(context["plan_origin_run_id"], mustPositive(context["workflow_run_id"])) &&
+			mustPositive(context["plan_origin_attempt"]) >= mustPositive(context["workflow_run_attempt"]) {
+			return recoveryError("run context plan origin is not an earlier exact attempt")
+		}
+		if exactInt(context["plan_origin_run_id"], mustPositive(context["recovered_from_run_id"])) &&
+			mustPositive(context["plan_origin_attempt"]) > mustPositive(context["recovered_from_attempt"]) {
+			return recoveryError("run context plan origin is ahead of its immediate source")
+		}
+	}
 	if context["blocked_reason"] != nil && !nonemptyString(context["blocked_reason"]) {
 		return recoveryError("run context blocked reason is malformed")
 	}
@@ -1019,6 +1117,42 @@ func (e *Engine) validateRunContext(context Object) error {
 		}
 	}
 	return nil
+}
+
+// contextPlanOrigin returns the immutable attempt that owns the native plan
+// and review. Direct recovery lineage remains in recovered_from_* and may
+// advance independently on each interrupted observer.
+func contextPlanOrigin(context Object, requireKnown bool) (int64, int64, error) {
+	originRunValue, originRunPresent := context["plan_origin_run_id"]
+	originAttemptValue, originAttemptPresent := context["plan_origin_attempt"]
+	if originRunPresent != originAttemptPresent {
+		return 0, 0, recoveryError("plan origin identity is incomplete")
+	}
+	if originRunPresent {
+		runID, runErr := positiveInteger(originRunValue, "plan origin run ID")
+		attempt, attemptErr := positiveInteger(originAttemptValue, "plan origin attempt")
+		if runErr != nil || attemptErr != nil || context["recovered_from_run_id"] == nil || context["recovered_from_attempt"] == nil {
+			return 0, 0, recoveryError("plan origin is not bound to a recovered context")
+		}
+		return runID, attempt, nil
+	}
+	if context["recovered_from_run_id"] != nil || context["recovered_from_attempt"] != nil {
+		if requireKnown {
+			return 0, 0, recoveryError("recovered context lacks its immutable plan origin")
+		}
+		runID, runErr := positiveInteger(context["recovered_from_run_id"], "recovery source run ID")
+		attempt, attemptErr := positiveInteger(context["recovered_from_attempt"], "recovery source attempt")
+		if runErr != nil || attemptErr != nil {
+			return 0, 0, recoveryError("single-source plan origin cannot be derived from its exact recovery source")
+		}
+		return runID, attempt, nil
+	}
+	runID, runErr := positiveInteger(context["workflow_run_id"], "original plan run ID")
+	attempt, attemptErr := positiveInteger(context["workflow_run_attempt"], "original plan attempt")
+	if runErr != nil || attemptErr != nil {
+		return 0, 0, recoveryError("original plan origin cannot be derived from its exact workflow context")
+	}
+	return runID, attempt, nil
 }
 
 func contextPlanIsCompletedWorkflowNoop(value any) bool {
@@ -1056,7 +1190,7 @@ func readRecoverySource(root string) (Object, error) {
 		return nil, err
 	}
 	fields := []string{"run_id", "attempt", "run", "artifact", "context_file", "plans", "policy_files"}
-	optional := []string{"publication"}
+	optional := []string{"publication", "prepared_qualification"}
 	source, err = exactWithOptional(source, fields, optional, "immutable recovery source proof")
 	if err != nil {
 		return nil, err

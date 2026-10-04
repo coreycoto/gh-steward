@@ -850,6 +850,7 @@ gh steward merge prepare --policy FILE --input event=FILE
 gh steward backlog|backlog-mutations|review|quarter|merge|execution|artifacts|governance|closeout|delivery|branches apply --input plan=FILE --approve-plan-sha EXACT_SHA256
 gh steward runs digest --input document=FILE
 gh steward runs recover --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH
+gh steward runs qualify-prepared --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA
 gh steward runs acquire-handoff --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --artifact-id ID --artifact-digest sha256:DIGEST [--purpose apply|transport]
 gh steward runs verify-publication --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA
 gh steward runs acquire-publication-candidate --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA --artifact-id ID --artifact-digest sha256:DIGEST

@@ -94,3 +94,14 @@ func TestVersionWorksWithoutGitHubOrCheckoutAndTypedOutputFiles(t *testing.T) {
 		t.Fatal(got, err)
 	}
 }
+
+func TestHelpDocumentsPreparedRecoveryQualification(t *testing.T) {
+	var out, stderr bytes.Buffer
+	if err := (Runner{Out: &out, Err: &stderr}).Run(context.Background(), []string{"help"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "gh steward runs qualify-prepared --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("help omits the prepared qualification command contract: %q", want)
+	}
+}

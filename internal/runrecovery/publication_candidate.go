@@ -65,9 +65,18 @@ func (e *Engine) AcquirePublicationCandidate(ctx context.Context, reader Actions
 	if err != nil {
 		return nil, err
 	}
+	frontierDigest, err := preparedFrontierDigest(chain["prepared_frontier"])
+	if err != nil {
+		return nil, err
+	}
+	emptyFrontierDigest, err := preparedFrontierDigest([]any{})
+	if err != nil {
+		return nil, err
+	}
 	if !exactInt(observation["schema_version"], 1) || observation["outcome"] != "fresh" ||
 		!Equal(observation["target"], target) || !Equal(observation["run"], run) || !exactInt(observation["run_id"], inv.RunID) ||
-		!exactInt(observation["attempt"], inv.Attempt) || observation["recovery_key"] != inv.RecoveryKey || observation["chain_sha256"] != prefixDigest {
+		!exactInt(observation["attempt"], inv.Attempt) || observation["recovery_key"] != inv.RecoveryKey || observation["chain_sha256"] != prefixDigest ||
+		observation["prepared_frontier_sha256"] != frontierDigest || frontierDigest != emptyFrontierDigest {
 		return nil, errors.New("publication acquisition lost its exact fresh recovery observation")
 	}
 	metadata, err := reader.Read(ctx, fmt.Sprintf("repos/%s/actions/artifacts/%d", e.repository.FullName(), artifactID))

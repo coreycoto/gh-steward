@@ -12,7 +12,7 @@ import (
 	"github.com/coreycoto/gh-steward/internal/contract"
 )
 
-const settlementSchemaVersion = int64(3)
+const settlementSchemaVersion = int64(4)
 const maxHistoryRuns = 100_000
 const maxPendingAttempts = 100_000
 
@@ -26,7 +26,7 @@ var (
 var (
 	immutableRunFields  = []string{"id", "created_at", "display_title", "event", "workflow_id", "head_branch", "head_sha"}
 	targetFields        = []string{"workflow_file", "repository", "server_url", "workflow_id", "recovery_key"}
-	chainFields         = []string{"schema_version", "target", "inventory", "settlements", "sha256"}
+	chainFields         = []string{"schema_version", "target", "inventory", "settlements", "prepared_frontier", "prepared_terminal_proofs", "sha256"}
 	inventoryFields     = []string{"run", "settled_attempt"}
 	recordFields        = []string{"run_id", "attempt", "run", "attempt_target", "artifact", "context_file", "settlement"}
 	artifactFields      = []string{"name", "id", "digest"}
@@ -253,7 +253,7 @@ func EmptyChain(targetValue any) (Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	chain := Object{"schema_version": settlementSchemaVersion, "target": target, "inventory": []any{}, "settlements": []any{}}
+	chain := Object{"schema_version": settlementSchemaVersion, "target": target, "inventory": []any{}, "settlements": []any{}, "prepared_frontier": []any{}, "prepared_terminal_proofs": []any{}}
 	unsigned, err := Canonical(chain)
 	if err != nil {
 		return nil, err
@@ -627,6 +627,24 @@ func (e *Engine) ValidateSettlementRecord(value any, targetValue any) (Object, e
 		if err := e.validateRecoveredTerminal(settlement, target, record, policyFiles); err != nil {
 			return nil, err
 		}
+	case "prepared_terminal":
+		if artifact == nil || record["context_file"] == nil || attemptTarget["recovery_key"] == nil {
+			return nil, recoveryError("prepared-terminal settlement needs its exact artifact, context and attempt target")
+		}
+		if artifact["name"] != RecoveryArtifactName(target, runID, attempt) {
+			return nil, recoveryError("prepared-terminal artifact name differs from its exact source attempt")
+		}
+		settlement, err = Exact(settlement, []string{"kind", "phase", "proof_sha256", "source_index"}, "prepared-terminal settlement")
+		if err != nil {
+			return nil, err
+		}
+		index, indexErr := contract.Integer(settlement["source_index"])
+		if settlement["phase"] != "completed" || !IsSHA256(settlement["proof_sha256"]) || indexErr != nil || index < 0 || index >= MaxPreparedFrontierAttempts {
+			return nil, recoveryError("prepared-terminal settlement has an invalid shared proof reference")
+		}
+		if _, err := LoadFileProof(record["context_file"], "prepared recovery source context"); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, recoveryError("settlement kind is unsupported")
 	}
@@ -654,7 +672,15 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 	if err != nil {
 		return nil, err
 	}
-	unsigned := Object{"schema_version": chain["schema_version"], "target": chain["target"], "inventory": chain["inventory"], "settlements": chain["settlements"]}
+	preparedFrontier, err := array(chain["prepared_frontier"], "prepared source frontier")
+	if err != nil || len(preparedFrontier) > MaxPreparedFrontierAttempts {
+		return nil, recoveryError("prepared source frontier is malformed or exceeds its explicit bound")
+	}
+	preparedProofs, err := array(chain["prepared_terminal_proofs"], "prepared terminal proof inventory")
+	if err != nil || len(preparedProofs) > maxPendingAttempts {
+		return nil, recoveryError("prepared terminal proof inventory is malformed or exceeds its explicit bound")
+	}
+	unsigned := Object{"schema_version": chain["schema_version"], "target": chain["target"], "inventory": chain["inventory"], "settlements": chain["settlements"], "prepared_frontier": chain["prepared_frontier"], "prepared_terminal_proofs": chain["prepared_terminal_proofs"]}
 	canonical, err := Canonical(unsigned)
 	if err != nil || !IsSHA256(chain["sha256"]) || SHA256(canonical) != chain["sha256"] {
 		return nil, recoveryError("settlement checkpoint digest is invalid")
@@ -744,6 +770,9 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 			return nil, recoveryError("latest attempt inventory contains a run absent from complete history")
 		}
 	}
+	if err := e.validatePreparedFrontier(chain, target, observed, observedAttempts, coveredByID, recordsByRun); err != nil {
+		return nil, err
+	}
 	return chain, nil
 }
 
@@ -792,10 +821,40 @@ func (e *Engine) ValidateCheckpointArtifact(chainValue, targetValue, metadataVal
 			match = record
 		}
 	}
-	if match == nil {
-		return nil, recoveryError("settlement checkpoint does not settle its own exact workflow attempt")
+	if match != nil {
+		return match, nil
 	}
-	return match, nil
+	// A pending-work checkpoint is allowed to advance only its own exact
+	// qualified source into the open frontier. It is not a terminal settlement:
+	// the source artifact and its immutable receipt remain independently
+	// verifiable, and a later actual native terminal record must close it.
+	frontier, err := array(chain["prepared_frontier"], "checkpoint prepared frontier")
+	if err != nil || len(frontier) == 0 || len(frontier) > MaxPreparedFrontierAttempts {
+		return nil, recoveryError("checkpoint has no bounded exact prepared frontier owner")
+	}
+	last, err := Exact(frontier[len(frontier)-1], []string{"kind", "source"}, "pending checkpoint owner")
+	if err != nil || !contains([]string{"prepared", "journaled"}, fmt.Sprint(last["kind"])) {
+		return nil, recoveryError("checkpoint frontier owner has an unsupported source kind")
+	}
+	source, err := object(last["source"], "pending checkpoint source")
+	if err != nil || !exactInt(source["run_id"], runID) || !exactInt(source["attempt"], attempt) {
+		return nil, recoveryError("pending checkpoint does not name its own exact frontier attempt")
+	}
+	var checked Object
+	if last["kind"] == "prepared" {
+		checked, err = e.validatePreparedSourceRecord(source, target)
+	} else {
+		err = e.validateJournaledPreparedSource(source, target)
+		checked = source
+	}
+	if err != nil {
+		return nil, recoveryError("pending checkpoint owner is not positively source-qualified: %v", err)
+	}
+	artifact, err := Exact(checked["artifact"], artifactFields, "pending checkpoint source artifact")
+	if err != nil || artifact["name"] != RecoveryArtifactName(target, runID, attempt) {
+		return nil, recoveryError("pending checkpoint source artifact differs from its exact attempt")
+	}
+	return Object{"run": checked["run"], "pending": true}, nil
 }
 
 // SelectCheckpoint returns the unique longest valid checkpoint and rejects forks.
@@ -815,12 +874,16 @@ func (e *Engine) SelectCheckpoint(candidates []Object, target any, observed []Ob
 	longestSettlements := longest["settlements"].([]any)
 	for _, chain := range valid[1:] {
 		rows := chain["settlements"].([]any)
-		if len(rows) > len(longestSettlements) {
+		frontier := chain["prepared_frontier"].([]any)
+		longestFrontier := longest["prepared_frontier"].([]any)
+		if len(rows) > len(longestSettlements) || (len(rows) == len(longestSettlements) && len(frontier) > len(longestFrontier)) {
 			longest, longestSettlements = chain, rows
 		}
 	}
 	for _, chain := range valid {
 		rows := chain["settlements"].([]any)
+		frontier := chain["prepared_frontier"].([]any)
+		longestFrontier := longest["prepared_frontier"].([]any)
 		if len(rows) > len(longestSettlements) {
 			return nil, recoveryError("checkpoint selection invariant failed")
 		}
@@ -829,8 +892,47 @@ func (e *Engine) SelectCheckpoint(candidates []Object, target any, observed []Ob
 				return nil, recoveryError("available settlement checkpoints form incompatible histories")
 			}
 		}
+		matchesOpenPrefix := len(frontier) <= len(longestFrontier)
+		if matchesOpenPrefix {
+			for index := range frontier {
+				if !Equal(frontier[index], longestFrontier[index]) {
+					matchesOpenPrefix = false
+					break
+				}
+			}
+		}
+		if !matchesOpenPrefix && !preparedFrontierRetainedByTerminalProof(frontier, longest["prepared_terminal_proofs"].([]any)) {
+			return nil, recoveryError("available prepared frontiers form incompatible histories")
+		}
 	}
 	return longest, nil
+}
+
+func preparedFrontierRetainedByTerminalProof(frontier, proofs []any) bool {
+	if len(frontier) == 0 {
+		return true
+	}
+	for _, rawProof := range proofs {
+		proof, ok := rawProof.(map[string]any)
+		if !ok {
+			continue
+		}
+		sources, ok := proof["sources"].([]any)
+		if !ok || len(sources) < len(frontier) {
+			continue
+		}
+		matched := true
+		for index := range frontier {
+			if !Equal(frontier[index], sources[index]) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 // PendingAttempts returns every uncovered historical attempt in deterministic order.
@@ -931,6 +1033,10 @@ func (e *Engine) AppendSettlement(chainValue Object, target any, observed []Obje
 	chain, err := e.ValidateChain(chainValue, target, observed, latest)
 	if err != nil {
 		return nil, err
+	}
+	frontier, err := array(chain["prepared_frontier"], "prepared source frontier")
+	if err != nil || len(frontier) != 0 {
+		return nil, recoveryError("an open prepared source frontier can close only with its actual multi-attempt terminal proof")
 	}
 	record, err := e.ValidateSettlementRecord(recordValue, target)
 	if err != nil {
@@ -1319,9 +1425,11 @@ func (e *Engine) BuildRecoverySourceRecord(input Object) (Object, error) {
 	}
 	planProofs := make([]Object, 0, len(rawPlans))
 	completedDispatches := 0
+	unfinishedDispatches := 0
+	unfinishedWithoutDispatch := 0
 	reader := &policyReader{root: root, used: map[string]bool{}}
 	for index, raw := range rawPlans {
-		planInput, err := Exact(raw, []string{"name", "command", "plan_sha256", "journal_id", "plan_path", "journal_path"}, "recovery-source plan input")
+		planInput, err := exactWithOptional(raw, []string{"name", "command", "plan_sha256", "journal_id", "plan_path", "journal_path"}, []string{"apply_result_path"}, "recovery-source plan input")
 		if err != nil {
 			return nil, err
 		}
@@ -1361,7 +1469,7 @@ func (e *Engine) BuildRecoverySourceRecord(input Object) (Object, error) {
 		if err := e.validateRecoveryPlanWithReader(context, entry, rawPlan, reader); err != nil {
 			return nil, recoveryError("recovery-source policy evidence is invalid: %v", err)
 		}
-		var journalFile Object
+		var journalFile, applyResultFile Object
 		if planInput["journal_path"] != nil {
 			journalPath, err := requiredAbsolutePath(planInput["journal_path"], "recovery-source journal")
 			if err != nil {
@@ -1384,30 +1492,70 @@ func (e *Engine) BuildRecoverySourceRecord(input Object) (Object, error) {
 				if err != nil {
 					return nil, err
 				}
-				completedDispatches += dispatches
+				if status == "completed" {
+					completedDispatches += dispatches
+					if planInput["apply_result_path"] == nil {
+						return nil, recoveryError("completed parent source lost its exact apply-result path")
+					}
+					applyResultPath, err := requiredAbsolutePath(planInput["apply_result_path"], "completed parent apply result")
+					if err != nil {
+						return nil, err
+					}
+					applyResultFile, err = readPathProof(applyResultPath, "completed parent apply result")
+					if err != nil {
+						return nil, err
+					}
+					parentProof := Object{"name": name, "command": command, "plan_sha256": planDigest, "journal_id": journalID,
+						"plan_file": planFile, "journal_file": journalFile, "apply_result_file": applyResultFile}
+					if _, err := ValidateTerminalPlanProof(parentProof); err != nil {
+						return nil, recoveryError("completed parent source has invalid terminal receipt bytes: %v", err)
+					}
+				} else if dispatches > 0 {
+					unfinishedDispatches += dispatches
+				} else {
+					return nil, recoveryError("unfinished source journal has no positive native dispatch receipt")
+				}
 			} else if !os.IsNotExist(err) {
 				return nil, recoveryError("recovery-source journal is unsafe or unreadable: %v", err)
 			} else if status != "prepared" {
 				return nil, recoveryError("started recovery-source plan lost its durable journal")
+			} else {
+				unfinishedWithoutDispatch++
 			}
 		} else if status != "prepared" {
 			return nil, recoveryError("started recovery-source plan lacks its durable journal path")
+		} else {
+			unfinishedWithoutDispatch++
 		}
-		planProofs = append(planProofs, Object{
+		proof := Object{
 			"name": name, "command": command, "plan_sha256": planDigest, "journal_id": journalID,
 			"plan_file": planFile, "journal_file": journalFile,
-		})
+		}
+		if applyResultFile != nil {
+			proof["apply_result_file"] = applyResultFile
+		}
+		planProofs = append(planProofs, proof)
 	}
-	if completedDispatches == 0 {
+	if unfinishedDispatches == 0 {
+		if completedDispatches > 0 {
+			return nil, recoveryError("completed parent receipts cannot qualify an unstarted continuation")
+		}
 		return nil, recoveryError("recovery-source has no durable native dispatch identity; no-dispatch remains unqualified")
+	}
+	if unfinishedWithoutDispatch != 0 {
+		return nil, recoveryError("recovery-source mixes journaled progress with an unstarted native plan")
 	}
 	policyFiles, err := retainedPolicyFiles(root, reader)
 	if err != nil {
 		return nil, err
 	}
+	planProofValues := make([]any, len(planProofs))
+	for index, proof := range planProofs {
+		planProofValues[index] = proof
+	}
 	return Object{
 		"run_id": runID, "attempt": attempt, "run": run, "artifact": artifact,
-		"context_file": contextFile, "plans": planProofs, "policy_files": policyFiles,
+		"context_file": contextFile, "plans": planProofValues, "policy_files": policyFiles,
 	}, nil
 }
 

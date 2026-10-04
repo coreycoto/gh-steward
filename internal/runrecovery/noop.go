@@ -19,7 +19,7 @@ import (
 const noopDecisionPath = "decisions/workflow-noop.json"
 
 var noopDecisionFields = []string{"schema_version", "decision", "repository", "server_url", "workflow_file", "run_id", "attempt", "recovery_key", "attempt_target", "workflow_sha", "event_name", "event_sha256"}
-var noopObservationFields = []string{"schema_version", "outcome", "target", "run", "run_id", "attempt", "recovery_key", "chain_sha256"}
+var noopObservationFields = []string{"schema_version", "outcome", "target", "run", "run_id", "attempt", "recovery_key", "chain_sha256", "prepared_frontier_sha256"}
 var noopDataFields = []string{"status", "decision", "proposal", "previews", "decision_sha256", "event_sha256", "observation_sha256", "workflow_api_sha256", "workflow_source_sha256", "jobs_sha256", "chain_sha256", "run_id", "attempt", "workflow_file", "recovery_key", "attempt_target", "workflow_sha", "event_name", "recovery_outcome"}
 var noopDecisions = map[string]bool{"no-change": true, "preview-only": true, "review-declined": true, "prerequisite-unavailable": true, "ineligible-trigger": true, "already-settled": true}
 
@@ -218,7 +218,11 @@ func persistRecoveryObservation(root string, invocation Invocation, run, target,
 	if err != nil {
 		return err
 	}
-	observation := Object{"schema_version": 1, "outcome": outcome, "target": target, "run": run, "run_id": invocation.RunID, "attempt": invocation.Attempt, "recovery_key": invocation.RecoveryKey, "chain_sha256": digest}
+	frontierDigest, err := preparedFrontierDigest(chain["prepared_frontier"])
+	if err != nil {
+		return err
+	}
+	observation := Object{"schema_version": 1, "outcome": outcome, "target": target, "run": run, "run_id": invocation.RunID, "attempt": invocation.Attempt, "recovery_key": invocation.RecoveryKey, "chain_sha256": digest, "prepared_frontier_sha256": frontierDigest}
 	return persistPackageJSON(root, "recovery-observation.json", observation)
 }
 
@@ -327,7 +331,11 @@ func (e *Engine) FinishNoop(ctx context.Context, reader ActionsReader, options N
 	if err != nil {
 		return nil, err
 	}
-	if !Equal(observation["target"], target) || !Equal(observation["run"], run) || !exactInt(observation["run_id"], options.RunID) || !exactInt(observation["attempt"], options.Attempt) || observation["recovery_key"] != options.RecoveryKey || observation["chain_sha256"] != prefixDigest {
+	frontierDigest, err := preparedFrontierDigest(chain["prepared_frontier"])
+	if err != nil {
+		return nil, err
+	}
+	if !Equal(observation["target"], target) || !Equal(observation["run"], run) || !exactInt(observation["run_id"], options.RunID) || !exactInt(observation["attempt"], options.Attempt) || observation["recovery_key"] != options.RecoveryKey || observation["chain_sha256"] != prefixDigest || observation["prepared_frontier_sha256"] != frontierDigest {
 		return nil, errors.New("current no-op lost the exact fresh or fully settled recovery observation")
 	}
 	eventBytes, err := ReadPackageFile(root, "events/trigger-event.json")
@@ -573,7 +581,9 @@ func (e *Engine) validateWorkflowNoop(runContext, entry, plan Object, reader *po
 	if outcome == "terminal" && attempt <= 1 {
 		return errors.New("settled-observer no-op requires an exact rerun")
 	}
-	if !IsSHA256(observation["chain_sha256"]) || data["chain_sha256"] != observation["chain_sha256"] || data["observation_sha256"] != SHA256(observationBytes) || data["event_sha256"] != SHA256(eventBytes) || data["decision_sha256"] != SHA256(decisionBytes) {
+	emptyFrontierDigest, err := preparedFrontierDigest([]any{})
+	if err != nil || observation["prepared_frontier_sha256"] != emptyFrontierDigest ||
+		!IsSHA256(observation["chain_sha256"]) || data["chain_sha256"] != observation["chain_sha256"] || data["observation_sha256"] != SHA256(observationBytes) || data["event_sha256"] != SHA256(eventBytes) || data["decision_sha256"] != SHA256(decisionBytes) {
 		return errors.New("workflow no-op did not retain exact decision, event and predecessor proof bytes")
 	}
 	if target["workflow_file"] != runContext["workflow_file"] || run["display_title"] != runContext["run_name"] || run["event"] != data["event_name"] || runContext["trusted_source_sha"] != data["workflow_sha"] || !settlementSHA40.MatchString(fmt.Sprint(data["workflow_sha"])) {

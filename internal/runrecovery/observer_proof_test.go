@@ -131,6 +131,58 @@ func TestRecoveredTerminalProofCannotAlterCompletedSourceReceipt(t *testing.T) {
 	}
 }
 
+func TestRecoveredTerminalProofPreservesCompletedParentApplyResultBytes(t *testing.T) {
+	proof, target := makeRecoveredTerminalProof(t)
+	parentPlan, parentProof := makeNativeTerminalProof(t, []contract.Operation{nativeTestOperation("completed-parent", "branch-delete")}, nativeAckBranchDeletion)
+	parentProof["name"] = "completed-parent"
+
+	source := proof["source"].(Object)
+	observer := proof["observer"].(Object)
+	source["plans"] = append(source["plans"].([]any), parentProof)
+	observer["plans"] = append(observer["plans"].([]any), cloneNativeObject(parentProof))
+
+	sourceContextValue, err := LoadFileProof(source["context_file"], "source context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceContext := sourceContextValue.(Object)
+	parentContextPlan := Object{
+		"name": "completed-parent", "command": parentPlan.Command, "sha256": parentPlan.SHA256,
+		"journal_id": parentProof["journal_id"], "status": "completed",
+	}
+	sourceContext["plans"] = append(sourceContext["plans"].([]any), parentContextPlan)
+	source["context_file"] = nativeJSONFileProof(t, sourceContext)
+
+	observerContextValue, err := LoadFileProof(observer["context_file"], "observer context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observerContext := observerContextValue.(Object)
+	observerContextPlan := cloneNativeObject(parentContextPlan)
+	observerContext["plans"] = append(observerContext["plans"].([]any), observerContextPlan)
+	observer["context_file"] = nativeJSONFileProof(t, observerContext)
+
+	if _, err := ValidateRecoveredTerminalProof(proof, target); err != nil {
+		t.Fatalf("unchanged completed parent result bytes should remain valid: %v", err)
+	}
+
+	changed := cloneObserverProof(proof)
+	completedParent := changed["observer"].(Object)["plans"].([]any)[1].(Object)
+	applyValue, err := LoadFileProof(completedParent["apply_result_file"], "completed parent apply result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyResult := applyValue.(Object)
+	applyResult["tool_version"] = "0.1.0+equivalent-receipt"
+	completedParent["apply_result_file"] = nativeJSONFileProof(t, applyResult)
+	if _, err := ValidateTerminalPlanProof(completedParent); err != nil {
+		t.Fatalf("substituted completed parent result should remain semantically valid: %v", err)
+	}
+	if _, err := ValidateRecoveredTerminalProof(changed, target); err == nil {
+		t.Fatal("observer substituted byte-different completed parent apply-result evidence")
+	}
+}
+
 func TestRecoveredTerminalProofPreservesAndValidatesPolicyFiles(t *testing.T) {
 	proof, target := makeRecoveredTerminalProof(t)
 	policyFile := MakeFileProof([]byte(`{"approved":true}`))
@@ -161,6 +213,21 @@ func TestRecoveredTerminalProofPreservesAndValidatesPolicyFiles(t *testing.T) {
 	malformed["observer"].(Object)["policy_files"].(Object)["events/dispatch-event.json"] = Object{"sha256": strings.Repeat("0", 64), "base64": "e30="}
 	if _, err := ValidateRecoveredTerminalProof(malformed, target); err == nil {
 		t.Fatal("policy sidecar with a mismatched raw-byte digest was accepted")
+	}
+}
+
+func TestRecoveredTerminalProofRejectsForgedCrossRunPlanOrigin(t *testing.T) {
+	proof, target := makeRecoveredTerminalProof(t)
+	observer := proof["observer"].(Object)
+	contextValue, err := LoadFileProof(observer["context_file"], "observer context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	context := contextValue.(Object)
+	context["plan_origin_run_id"], context["plan_origin_attempt"] = int64(999), int64(2)
+	observer["context_file"] = nativeJSONFileProof(t, context)
+	if _, err := ValidateRecoveredTerminalProof(proof, target); err == nil {
+		t.Fatal("terminal observer with a forged cross-run native plan origin was accepted")
 	}
 }
 

@@ -81,12 +81,36 @@ func ValidateRecoveredTerminalProof(proof any, target Object) ([]Object, error) 
 		len(source.plans) != len(observer.plans) {
 		return nil, errors.New("observer lost the exact recovery origin, target or plan inventory")
 	}
+	sourceOriginRunID, sourceOriginAttempt, originErr := contextPlanOrigin(sourceContext, true)
+	if originErr != nil {
+		return nil, errors.New("source context does not preserve its exact native plan origin")
+	}
+	_, observerOriginRunPresent := observerContext["plan_origin_run_id"]
+	_, observerOriginAttemptPresent := observerContext["plan_origin_attempt"]
+	var observerOriginRunID, observerOriginAttempt int64
+	if observerOriginRunPresent || observerOriginAttemptPresent {
+		if observerOriginRunPresent != observerOriginAttemptPresent {
+			return nil, errors.New("observer context has an incomplete native plan origin")
+		}
+		observerOriginRunID, observerOriginAttempt, originErr = contextPlanOrigin(observerContext, true)
+		if originErr != nil {
+			return nil, errors.New("observer context has an invalid native plan origin")
+		}
+	} else {
+		if sourceContext["recovered_from_run_id"] != nil || sourceContext["recovered_from_attempt"] != nil {
+			return nil, errors.New("multi-attempt observer omits its original native plan origin")
+		}
+		observerOriginRunID, observerOriginAttempt = sourceOriginRunID, sourceOriginAttempt
+	}
+	if observerOriginRunID != sourceOriginRunID || observerOriginAttempt != sourceOriginAttempt {
+		return nil, errors.New("observer changed the exact native plan origin")
+	}
 
 	decoded := make([]Object, 0, len(source.plans))
 	seenNames := make(map[string]bool, len(source.plans))
 	persistedDispatches := 0
 	for index, sourceRaw := range source.plans {
-		original, err := Exact(sourceRaw, observerSourcePlanFields, "source native plan proof")
+		original, err := exactWithOptional(sourceRaw, observerSourcePlanFields, []string{"apply_result_file"}, "source native plan proof")
 		if err != nil {
 			return nil, err
 		}
@@ -108,6 +132,18 @@ func ValidateRecoveredTerminalProof(proof any, target Object) ([]Object, error) 
 		sourceContextPlan := sourceContextPlans[index].(map[string]any)
 		if original["journal_file"] == nil && sourceContextPlan["status"] != "prepared" {
 			return nil, errors.New("a started source plan lost its durable native journal")
+		}
+		if sourceContextPlan["status"] == "completed" {
+			if original["journal_file"] == nil || original["apply_result_file"] == nil {
+				return nil, errors.New("completed source plan lost its exact terminal receipts")
+			}
+			if !Equal(original["journal_file"], completed["journal_file"]) ||
+				!Equal(original["apply_result_file"], completed["apply_result_file"]) {
+				return nil, errors.New("observer changed completed source parent receipt bytes")
+			}
+			if _, err := ValidateTerminalPlanProof(original); err != nil {
+				return nil, fmt.Errorf("completed source parent receipt is invalid: %w", err)
+			}
 		}
 		plan, err := ValidateTerminalPlanProof(completed)
 		if err != nil {

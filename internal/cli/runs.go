@@ -58,7 +58,7 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 	if flags.NArg() != 0 || *format != "json" {
 		return errors.New("runs accepts flags only and JSON output")
 	}
-	if action == "finalize" && *workflowSHA == "" && os.Getenv("GITHUB_ACTIONS") == "true" {
+	if (action == "finalize" || action == "qualify-prepared") && *workflowSHA == "" && os.Getenv("GITHUB_ACTIONS") == "true" {
 		*workflowSHA = os.Getenv("GITHUB_WORKFLOW_SHA")
 	}
 	if action != "context-start" {
@@ -82,7 +82,7 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 			return err
 		}
 		data = contract.Object{"sha256": runrecovery.SHA256(encoded)}
-	case "recover", "finalize", "verify-publication", "acquire-publication-candidate", "acquire-handoff", "finish-noop", "context-start", "context-observe", "context-observe-source", "context-record-plan", "context-phase", "context-mark-plan", "context-capture-journal", "context-install-journal":
+	case "recover", "finalize", "qualify-prepared", "verify-publication", "acquire-publication-candidate", "acquire-handoff", "finish-noop", "context-start", "context-observe", "context-observe-source", "context-record-plan", "context-phase", "context-mark-plan", "context-capture-journal", "context-install-journal":
 		if filepath.IsAbs(*policyPath) {
 			return errors.New("recovery policy must be relative to the trusted checkout")
 		}
@@ -112,7 +112,7 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 			}
 			*packageRoot = confined
 		}
-		needsProvider := action == "recover" || action == "finalize" || action == "verify-publication" || action == "acquire-publication-candidate" || action == "acquire-handoff" || action == "finish-noop"
+		needsProvider := action == "recover" || action == "finalize" || action == "qualify-prepared" || action == "verify-publication" || action == "acquire-publication-candidate" || action == "acquire-handoff" || action == "finish-noop"
 		reader := r.Actions
 		if needsProvider && reader == nil {
 			transport, err := native.New(checkout, repository)
@@ -157,6 +157,8 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 			data, err = engine.Recover(ctx, reader, invocation)
 		case "finalize":
 			data, err = engine.Finalize(ctx, reader, runrecovery.FinalizeOptions{Invocation: invocation, ArtifactID: *artifactID, ArtifactDigest: *artifactDigest, Checkpoint: *checkpoint, RecoverySource: *source, PublicationProof: *publicationProof, WorkflowSHA: *workflowSHA})
+		case "qualify-prepared":
+			data, err = engine.QualifyPrepared(ctx, reader, runrecovery.PreparedQualificationOptions{Invocation: invocation, WorkflowSHA: *workflowSHA})
 		case "verify-publication":
 			data, err = engine.VerifyPublication(ctx, reader, invocation, *workflowSHA)
 		case "acquire-publication-candidate":
@@ -216,7 +218,7 @@ func validateActionsWorkflowSource(action, supplied string) error {
 		return nil
 	}
 	switch action {
-	case "context-start", "finalize", "verify-publication", "acquire-publication-candidate", "finish-noop":
+	case "context-start", "finalize", "qualify-prepared", "verify-publication", "acquire-publication-candidate", "finish-noop":
 		runtimeSHA := os.Getenv("GITHUB_WORKFLOW_SHA")
 		if !actionsWorkflowSHA.MatchString(runtimeSHA) || supplied != runtimeSHA {
 			return errors.New("trusted workflow source must equal the actual GITHUB_WORKFLOW_SHA runtime value")

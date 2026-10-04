@@ -155,11 +155,12 @@ func terminalPlanInputs(root string, runContext Object, completed bool) ([]any, 
 		}
 		journalPath, err := PackageFile(root, journalRelative)
 		if err != nil {
-			if completed || entry["status"] != "prepared" {
+			if completed || (entry["status"] != "prepared" && entry["status"] != "dispatching") {
 				return nil, err
 			}
-			// A prepared source plan is explicitly journal-free. A symbolic or
-			// unreadable existing path cannot be treated as absence.
+			// A plan can still be journal-free while the context is dispatching,
+			// before the native apply step begins. A symbolic or unreadable path
+			// cannot be treated as absence.
 			if _, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(journalRelative))); !errors.Is(statErr, os.ErrNotExist) {
 				return nil, err
 			}
@@ -167,7 +168,7 @@ func terminalPlanInputs(root string, runContext Object, completed bool) ([]any, 
 		} else {
 			plan["journal_path"] = journalPath
 		}
-		if completed {
+		if completed || entry["status"] == "completed" {
 			resultRelative := "apply-results/" + name + ".json"
 			if value, exists := entry["apply_result_path"]; exists {
 				resultRelative, ok = value.(string)
@@ -245,6 +246,151 @@ func (e *Engine) terminalRecord(ctx context.Context, reader ActionsReader, invoc
 	return e.BuildTerminalRecord(input)
 }
 
+func (e *Engine) finalizePendingCheckpoint(ctx context.Context, reader ActionsReader, options FinalizeOptions, root, destination string, runContext Object) (Object, error) {
+	if runContext["publication"] != nil || len(runContext["plans"].([]any)) == 0 ||
+		(runContext["phase"] != "prepared" && runContext["phase"] != "dispatching") {
+		return Object{"outcome": "pending"}, nil
+	}
+	if options.ArtifactID < 1 || !settlementArtifactDigest.MatchString(options.ArtifactDigest) {
+		return nil, errors.New("pending-work checkpoint requires the exact uploaded recovery artifact receipt")
+	}
+	runs, run, target, observed, attempts, err := e.invocationHistory(ctx, reader, options.Invocation)
+	if err != nil {
+		return nil, err
+	}
+	active := false
+	for _, item := range runs {
+		if exactInt(item["id"], options.RunID) && item["status"] == "in_progress" {
+			active = true
+		}
+	}
+	if !active {
+		return nil, errors.New("pending-work checkpoint applies only to the currently executing workflow attempt")
+	}
+	chainValue, err := LoadJSON(filepath.Join(root, "settlement-chain.json"))
+	if err != nil {
+		return nil, err
+	}
+	chain, err := e.ValidateChain(chainValue, target, observed, attempts)
+	if err != nil {
+		return nil, err
+	}
+	frontier, err := array(chain["prepared_frontier"], "prepared source frontier")
+	if err != nil {
+		return nil, err
+	}
+	pending, err := PendingAttempts(chain, observed, attempts, options.RunID, options.Attempt)
+	if err != nil || len(pending) != len(frontier) {
+		return nil, errors.New("pending-work checkpoint cannot bypass an unsettled predecessor")
+	}
+	observationValue, err := LoadJSON(filepath.Join(root, "recovery-observation.json"))
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePreparedObservation(observationValue, options.Invocation, target, run, chain); err != nil {
+		return nil, err
+	}
+	metadata, err := reader.Read(ctx, fmt.Sprintf("repos/%s/actions/artifacts/%d", e.repository.FullName(), options.ArtifactID))
+	if err != nil {
+		return nil, err
+	}
+	artifact, err := artifactIdentity(metadata, RecoveryArtifactName(target, options.RunID, options.Attempt), options.RunID)
+	artifactRun, runErr := object(metadata["workflow_run"], "pending-work artifact workflow run")
+	if err != nil || runErr != nil || !exactInt(artifact["id"], options.ArtifactID) || artifact["digest"] != options.ArtifactDigest || artifactRun["head_sha"] != run["head_sha"] {
+		return nil, errors.New("pending-work artifact differs from its exact upload receipt or source")
+	}
+	payload, err := downloadArtifact(ctx, reader, artifact)
+	if err != nil {
+		return nil, err
+	}
+	retained, err := retainedPackageFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	if err := VerifyUploadedFiles(payload, root, retained); err != nil {
+		return nil, err
+	}
+	plans, err := terminalPlanInputs(root, runContext, false)
+	if err != nil {
+		return nil, err
+	}
+	qualificationPath := filepath.Join(root, filepath.FromSlash(preparedQualificationPath))
+	kind := "journaled"
+	var source Object
+	if _, statErr := os.Lstat(qualificationPath); statErr == nil {
+		if !settlementSHA40.MatchString(options.WorkflowSHA) || runContext["trusted_source_sha"] != options.WorkflowSHA {
+			return nil, errors.New("prepared checkpoint requires the exact runtime control workflow SHA")
+		}
+		source, err = e.BuildPreparedSourceRecord(Object{
+			"target": target, "run_id": options.RunID, "attempt": options.Attempt, "run": run, "artifact": artifact,
+			"context_path": filepath.Join(root, "run-context.json"), "plans": plans, "qualification_path": qualificationPath,
+		})
+		if err != nil {
+			return Object{"outcome": "pending", "reason": "current upload does not contain a valid source-qualified no-dispatch proof"}, nil
+		}
+		qualificationBytes, err := LoadRawFileProof(source["prepared_qualification"], "current prepared qualification")
+		if err != nil {
+			return nil, err
+		}
+		qualificationValue, err := DecodeValue(qualificationBytes)
+		if err != nil {
+			return nil, err
+		}
+		workflowPolicy, err := e.workflowPolicy(fmt.Sprint(runContext["workflow_file"]))
+		if err != nil {
+			return nil, err
+		}
+		pendingPlans := []Object{}
+		for _, raw := range source["plans"].([]any) {
+			proof, _ := object(raw, "prepared checkpoint plan proof")
+			contextPlans := runContext["plans"].([]any)
+			for _, contextRaw := range contextPlans {
+				entry, _ := object(contextRaw, "prepared checkpoint context plan")
+				if entry["name"] == proof["name"] && entry["status"] != "completed" {
+					pendingPlans = append(pendingPlans, Object{"name": proof["name"], "command": proof["command"], "plan_sha256": proof["plan_sha256"], "journal_id": proof["journal_id"]})
+				}
+			}
+		}
+		if err := validatePreparedQualification(qualificationValue, target, runContext, run, pendingPlans, workflowPolicy, false); err != nil {
+			return nil, errors.New("current prepared qualification is not from the exact current workflow source")
+		}
+		kind = "prepared"
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return nil, errors.New("current prepared qualification is unsafe or unreadable")
+	} else {
+		if len(frontier) == 0 {
+			return Object{"outcome": "pending"}, nil
+		}
+		source, err = e.BuildRecoverySourceRecord(Object{
+			"target": target, "run_id": options.RunID, "attempt": options.Attempt, "run": run, "artifact": artifact,
+			"context_path": filepath.Join(root, "run-context.json"), "plans": plans,
+		})
+		if err != nil {
+			return Object{"outcome": "pending", "reason": "current upload does not contain a complete positive native journal proof"}, nil
+		}
+	}
+	entry := preparedFrontierEntry(kind, source)
+	advanced, err := appendPreparedCurrentFrontier(chain, target, observed, attempts, entry, options.RunID, options.Attempt, e)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := Canonical(advanced)
+	if err != nil || len(encoded)+1 > MaxCheckpointBytes {
+		return nil, errors.New("pending-work checkpoint exceeds its explicit size bound")
+	}
+	if err := os.Mkdir(destination, 0700); err != nil {
+		return nil, err
+	}
+	if err := persistPackageFile(destination, "settlement-chain.json", append(encoded, '\n')); err != nil {
+		return nil, err
+	}
+	checkpointKind := "pending-native-progress"
+	if kind == "prepared" {
+		checkpointKind = "pending-prepared-work"
+	}
+	return Object{"outcome": "checkpoint", "checkpoint_kind": checkpointKind, "checkpoint_name": CheckpointArtifactName(target, options.RunID, options.Attempt), "checkpoint_path": filepath.Join(destination, "settlement-chain.json")}, nil
+}
+
 // Finalize authenticates the actual uploaded package before advancing a
 // checkpoint. It never calls a provider write or replaces an existing sidecar.
 func (e *Engine) Finalize(ctx context.Context, reader ActionsReader, options FinalizeOptions) (Object, error) {
@@ -264,8 +410,11 @@ func (e *Engine) Finalize(ctx context.Context, reader ActionsReader, options Fin
 		return nil, err
 	}
 	entries := runContext["plans"].([]any)
-	if runContext["phase"] != "completed" || (len(entries) == 0 && runContext["publication"] == nil) {
+	if len(entries) == 0 && runContext["publication"] == nil {
 		return Object{"outcome": "pending"}, nil
+	}
+	if runContext["phase"] != "completed" {
+		return e.finalizePendingCheckpoint(ctx, reader, options, root, destination, runContext)
 	}
 	runs, run, target, observed, attempts, err := e.invocationHistory(ctx, reader, options.Invocation)
 	if err != nil {
@@ -353,6 +502,7 @@ func (e *Engine) Finalize(ctx context.Context, reader ActionsReader, options Fin
 			return nil, err
 		}
 	}
+	var source Object
 	if options.RecoverySource != "" {
 		data, err := ReadPackageFile(root, options.RecoverySource)
 		if err != nil {
@@ -362,37 +512,10 @@ func (e *Engine) Finalize(ctx context.Context, reader ActionsReader, options Fin
 		if err != nil {
 			return nil, err
 		}
-		source, err := object(value, "original recovery source proof")
+		source, err = object(value, "original recovery source proof")
 		if err != nil {
 			return nil, err
 		}
-		sourceContextValue, err := LoadFileProof(source["context_file"], "original recovery source context")
-		if err != nil {
-			return nil, err
-		}
-		sourceContext, err := object(sourceContextValue, "original recovery source context")
-		if err != nil {
-			return nil, err
-		}
-		observer := Object{"run_id": record["run_id"], "attempt": record["attempt"], "run": record["run"], "artifact": record["artifact"], "context_file": record["context_file"], "plans": settled["plans"], "policy_files": settled["policy_files"]}
-		if settled["publication"] != nil {
-			observer["publication"] = settled["publication"]
-		}
-		recovered := Object{
-			"run_id": source["run_id"], "attempt": source["attempt"], "run": source["run"], "artifact": source["artifact"], "context_file": source["context_file"],
-			"attempt_target": Object{"recovery_key": sourceContext["recovery_key"], "identity": sourceContext["attempt_target"]},
-			"settlement":     Object{"kind": "recovered_terminal", "phase": "completed", "policy_files": settled["policy_files"], "proof": Object{"source": source, "observer": observer}},
-		}
-		chain, err = e.AppendSettlement(chain, target, observed, attempts, recovered, options.RunID, options.Attempt)
-		if err != nil {
-			return nil, err
-		}
-	} else if runContext["recovered_from_run_id"] != nil || runContext["recovered_from_attempt"] != nil {
-		return nil, errors.New("recovered terminal context lost its separate original source proof")
-	}
-	advanced, err := e.AppendSettlement(chain, target, observed, attempts, record, options.RunID, options.Attempt)
-	if err != nil {
-		return nil, err
 	}
 	retained, err := retainedPackageFiles(root)
 	if err != nil {
@@ -400,6 +523,54 @@ func (e *Engine) Finalize(ctx context.Context, reader ActionsReader, options Fin
 	}
 	if err := VerifyUploadedFiles(payload, root, retained); err != nil {
 		return nil, err
+	}
+	frontier, err := array(chain["prepared_frontier"], "prepared source frontier")
+	if err != nil {
+		return nil, err
+	}
+	var advanced Object
+	if len(frontier) > 0 {
+		if source == nil {
+			return nil, errors.New("prepared terminal context lost its exact source record")
+		}
+		last, err := Exact(frontier[len(frontier)-1], []string{"kind", "source"}, "latest prepared frontier source")
+		if err != nil || !Equal(last["source"], source) {
+			return nil, errors.New("prepared terminal source differs from the latest immutable frontier entry")
+		}
+		advanced, err = appendPreparedTerminal(chain, target, observed, attempts, record, options.RunID, options.Attempt, e)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if source != nil {
+			sourceContextValue, err := LoadFileProof(source["context_file"], "original recovery source context")
+			if err != nil {
+				return nil, err
+			}
+			sourceContext, err := object(sourceContextValue, "original recovery source context")
+			if err != nil {
+				return nil, err
+			}
+			observer := Object{"run_id": record["run_id"], "attempt": record["attempt"], "run": record["run"], "artifact": record["artifact"], "context_file": record["context_file"], "plans": settled["plans"], "policy_files": settled["policy_files"]}
+			if settled["publication"] != nil {
+				observer["publication"] = settled["publication"]
+			}
+			recovered := Object{
+				"run_id": source["run_id"], "attempt": source["attempt"], "run": source["run"], "artifact": source["artifact"], "context_file": source["context_file"],
+				"attempt_target": Object{"recovery_key": sourceContext["recovery_key"], "identity": sourceContext["attempt_target"]},
+				"settlement":     Object{"kind": "recovered_terminal", "phase": "completed", "policy_files": settled["policy_files"], "proof": Object{"source": source, "observer": observer}},
+			}
+			chain, err = e.AppendSettlement(chain, target, observed, attempts, recovered, options.RunID, options.Attempt)
+			if err != nil {
+				return nil, err
+			}
+		} else if runContext["recovered_from_run_id"] != nil || runContext["recovered_from_attempt"] != nil {
+			return nil, errors.New("recovered terminal context lost its separate original source proof")
+		}
+		advanced, err = e.AppendSettlement(chain, target, observed, attempts, record, options.RunID, options.Attempt)
+		if err != nil {
+			return nil, err
+		}
 	}
 	encoded, err := Canonical(advanced)
 	if err != nil || len(encoded)+1 > MaxCheckpointBytes {

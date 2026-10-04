@@ -23,7 +23,7 @@ func (e *Engine) recoveryHold(root, artifactName, reason string, invocation Invo
 
 // Each historical archive is extracted in its own bounded lifetime. A long
 // sequence of terminal predecessors cannot retain every expanded package.
-func (e *Engine) inspectHistoricalPackage(ctx context.Context, reader ActionsReader, invocation Invocation, runs []Object, run, target, artifact Object, attempt int64, payload []byte) (Object, error) {
+func (e *Engine) inspectHistoricalPackage(ctx context.Context, reader ActionsReader, invocation Invocation, runs []Object, run, target, artifact Object, attempt int64, payload []byte, preparedFrontierOpen bool) (Object, error) {
 	extracted, err := os.MkdirTemp(filepath.Dir(invocation.PackageRoot), "gh-steward-source-")
 	if err != nil {
 		return nil, err
@@ -42,19 +42,38 @@ func (e *Engine) inspectHistoricalPackage(ctx context.Context, reader ActionsRea
 		return nil, err
 	}
 	if runContext["phase"] == "completed" {
-		if runContext["recovered_from_run_id"] != nil || runContext["recovered_from_attempt"] != nil {
+		if (runContext["recovered_from_run_id"] != nil || runContext["recovered_from_attempt"] != nil) && !preparedFrontierOpen {
 			return nil, errors.New("historical observer requires its separate original source checkpoint")
 		}
 		record, err := e.terminalRecord(ctx, reader, original, extracted, runs, run, target, artifact, runContext)
-		return Object{"kind": "terminal", "record": record}, err
+		kind := "terminal"
+		if preparedFrontierOpen {
+			kind = "prepared-terminal"
+		}
+		return Object{"kind": kind, "record": record}, err
 	}
 	publication, hasPublication := runContext["publication"].(Object)
-	if runContext["phase"] != "dispatching" && !(runContext["phase"] == "prepared" && hasPublication && publication["stage"] == "pr-verify-pending") {
+	qualificationPath := filepath.Join(extracted, filepath.FromSlash(preparedQualificationPath))
+	_, qualificationStatErr := os.Lstat(qualificationPath)
+	hasPreparedQualification := qualificationStatErr == nil
+	if qualificationStatErr != nil && !errors.Is(qualificationStatErr, os.ErrNotExist) {
+		return nil, errors.New("historical prepared qualification is unsafe or unreadable")
+	}
+	preparedPublication := runContext["phase"] == "prepared" && hasPublication && publication["stage"] == "pr-verify-pending"
+	preparedNative := runContext["phase"] == "prepared" && runContext["publication"] == nil && hasPreparedQualification
+	if runContext["phase"] != "dispatching" && !preparedPublication && !preparedNative {
 		return nil, errors.New("prepared or no-plan attempt lacks source-qualified no-dispatch proof")
 	}
 	plans, err := terminalPlanInputs(extracted, runContext, false)
 	if err != nil {
 		return nil, err
+	}
+	if hasPreparedQualification {
+		source, err := e.BuildPreparedSourceRecord(Object{
+			"target": target, "run_id": runID, "attempt": attempt, "run": run, "artifact": artifact,
+			"context_path": filepath.Join(extracted, "run-context.json"), "plans": plans, "qualification_path": qualificationPath,
+		})
+		return Object{"kind": "prepared", "source": source, "context": runContext}, err
 	}
 	input := Object{"target": target, "run_id": runID, "attempt": attempt, "run": run, "artifact": artifact, "context_path": filepath.Join(extracted, "run-context.json"), "plans": plans}
 	if hasPublication {
@@ -169,6 +188,128 @@ func checkpointCandidates(ctx context.Context, reader ActionsReader, e *Engine, 
 	return candidates, nil
 }
 
+func preparedFrontierKey(runID, attempt int64) string {
+	return fmt.Sprintf("%d:%d", runID, attempt)
+}
+
+func (e *Engine) verifyPreparedFrontierPackages(ctx context.Context, reader ActionsReader, invocation Invocation, runs []Object, target Object, allArtifacts []Object, frontier []any) (map[string][]byte, int64, int64, error) {
+	payloads := make(map[string][]byte, len(frontier))
+	var bytesRead int64
+	for _, raw := range frontier {
+		entry, err := Exact(raw, []string{"kind", "source"}, "prepared frontier source")
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		source, err := object(entry["source"], "prepared frontier source")
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		runID, attempt, err := preparedSourceIdentity(source)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		sourceRun, err := object(source["run"], "prepared frontier source run")
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		historyRun := observedRunFromRuns(runs, runID)
+		if historyRun == nil {
+			return nil, 0, 0, errors.New("prepared frontier source differs from its exact current workflow history")
+		}
+		historyIdentity, historyErr := NormalizeRun(historyRun)
+		if historyErr != nil || !Equal(historyIdentity, source["run"]) {
+			return nil, 0, 0, errors.New("prepared frontier source differs from its exact current workflow history")
+		}
+		status, err := reader.Read(ctx, fmt.Sprintf("repos/%s/actions/runs/%d/attempts/%d", e.repository.FullName(), runID, attempt))
+		identity, identityErr := NormalizeRun(status)
+		if err != nil || identityErr != nil || !Equal(identity, source["run"]) || !exactInt(status["run_attempt"], attempt) || status["status"] != "completed" {
+			return nil, 0, 0, errors.New("prepared frontier source attempt is active or its exact status cannot be verified")
+		}
+		name := RecoveryArtifactName(target, runID, attempt)
+		var metadata Object
+		for _, candidate := range allArtifacts {
+			if candidate["name"] != name {
+				continue
+			}
+			if metadata != nil {
+				return nil, 0, 0, errors.New("prepared frontier source has duplicated recovery artifacts")
+			}
+			metadata = candidate
+		}
+		if metadata == nil {
+			return nil, 0, 0, errors.New("prepared frontier source has no unique immutable recovery artifact")
+		}
+		artifact, err := artifactIdentity(metadata, name, runID)
+		metadataRun, metadataErr := object(metadata["workflow_run"], "prepared frontier artifact run")
+		storedArtifact, storedErr := object(source["artifact"], "prepared frontier stored artifact")
+		if err != nil || metadataErr != nil || storedErr != nil || !Equal(artifact, storedArtifact) || metadataRun["head_sha"] != sourceRun["head_sha"] {
+			return nil, 0, 0, errors.New("prepared frontier artifact differs from its exact immutable upload receipt")
+		}
+		payload, err := downloadArtifact(ctx, reader, artifact)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		bytesRead += int64(len(payload))
+		if len(payloads)+1 > MaxCheckpointArtifacts || bytesRead > MaxHistoryAcquisitionBytes {
+			return nil, 0, 0, errors.New("prepared frontier acquisition exceeds its aggregate history budget")
+		}
+		inspected, err := e.inspectHistoricalPackage(ctx, reader, invocation, runs, sourceRun, target, artifact, attempt, payload, false)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		kind := "journaled"
+		if inspected["kind"] == "prepared" {
+			kind = "prepared"
+		} else if inspected["kind"] != "source" {
+			return nil, 0, 0, errors.New("prepared frontier artifact no longer contains its qualified interrupted source")
+		}
+		if entry["kind"] != kind || !Equal(inspected["source"], source) {
+			return nil, 0, 0, errors.New("prepared frontier artifact differs from its retained immutable source proof")
+		}
+		payloads[preparedFrontierKey(runID, attempt)] = payload
+	}
+	return payloads, int64(len(payloads)), bytesRead, nil
+}
+
+func observedRunFromRuns(runs []Object, runID int64) Object {
+	for _, run := range runs {
+		if exactInt(run["id"], runID) {
+			return run
+		}
+	}
+	return nil
+}
+
+func (e *Engine) restoreRecoveredSource(payload []byte, source, sourceContext, current Object, runID, attempt int64, invocation Invocation, target Object, chain Object, root string, artifactName string) (Object, error) {
+	if err := restorePackageExceptFrontier(payload, root); err != nil {
+		return nil, err
+	}
+	planOriginRunID, planOriginAttempt, err := contextPlanOrigin(sourceContext, true)
+	if err != nil {
+		return nil, errors.New("restored source context does not preserve its immutable plan origin")
+	}
+	if err := persistPackageJSON(root, "settlement-chain.json", chain); err != nil {
+		return nil, err
+	}
+	if err := persistPackageJSON(root, "recovery-source.json", source); err != nil {
+		return nil, err
+	}
+	sourceContext["workflow_run_id"] = invocation.RunID
+	sourceContext["workflow_run_attempt"] = invocation.Attempt
+	sourceContext["run_name"] = invocation.RunName
+	sourceContext["recovered_from_run_id"] = runID
+	sourceContext["recovered_from_attempt"] = attempt
+	sourceContext["plan_origin_run_id"] = planOriginRunID
+	sourceContext["plan_origin_attempt"] = planOriginAttempt
+	if err := persistPackageJSON(root, "run-context.json", sourceContext); err != nil {
+		return nil, err
+	}
+	if err := persistRecoveryObservation(root, invocation, current, target, chain, "resumed"); err != nil {
+		return nil, err
+	}
+	return Object{"outcome": "resumed", "reason": "restored the exact original target, plans and durable journals", "artifact_name": artifactName}, nil
+}
+
 // Cumulative checkpoints repeat their predecessor prefix. Limit aggregate
 // work explicitly until an authenticated checkpoint-compaction protocol exists.
 const MaxCheckpointArtifacts = 1024
@@ -215,8 +356,14 @@ func (e *Engine) Recover(ctx context.Context, reader ActionsReader, invocation I
 		return nil, err
 	}
 	defer os.RemoveAll(scratch)
-	var historicalBytes int64
-	historicalCount := 0
+	frontier, err := array(chain["prepared_frontier"], "prepared source frontier")
+	if err != nil {
+		return hold(err)
+	}
+	frontierPayloads, historicalCount, historicalBytes, err := e.verifyPreparedFrontierPackages(ctx, reader, invocation, runs, target, allArtifacts, frontier)
+	if err != nil {
+		return hold(err)
+	}
 	for {
 		pending, err := PendingAttempts(chain, observed, attempts, invocation.RunID, invocation.Attempt)
 		if err != nil {
@@ -241,7 +388,38 @@ func (e *Engine) Recover(ctx context.Context, reader ActionsReader, invocation I
 			}
 			return Object{"outcome": "fresh", "reason": "all prior exact workflow attempts are positively settled", "artifact_name": artifactName}, nil
 		}
-		first := pending[0]
+		frontier, err = array(chain["prepared_frontier"], "prepared source frontier")
+		if err != nil || len(pending) < len(frontier) {
+			return hold(errors.New("prepared source frontier does not cover its exact unsettled history"))
+		}
+		if len(frontier) > 0 && len(pending) == len(frontier) {
+			last, err := Exact(frontier[len(frontier)-1], []string{"kind", "source"}, "latest prepared frontier source")
+			if err != nil {
+				return hold(err)
+			}
+			source, err := object(last["source"], "latest prepared frontier source")
+			if err != nil {
+				return hold(err)
+			}
+			runID, attempt, err := preparedSourceIdentity(source)
+			if err != nil {
+				return hold(err)
+			}
+			payload := frontierPayloads[preparedFrontierKey(runID, attempt)]
+			if payload == nil {
+				return hold(errors.New("latest prepared frontier source was not reverified from its immutable artifact"))
+			}
+			sourceContext, err := preparedSourceContext(source)
+			if err != nil {
+				return hold(err)
+			}
+			result, err := e.restoreRecoveredSource(payload, source, sourceContext, current, runID, attempt, invocation, target, chain, root, artifactName)
+			if err != nil {
+				return nil, err
+			}
+			return result, nil
+		}
+		first := pending[len(frontier)]
 		run, err := object(first["run"], "pending immutable run")
 		if err != nil {
 			return hold(err)
@@ -285,11 +463,24 @@ func (e *Engine) Recover(ctx context.Context, reader ActionsReader, invocation I
 		if historicalCount > MaxCheckpointArtifacts || historicalBytes > MaxHistoryAcquisitionBytes {
 			return hold(errors.New("normal recovery acquisition exceeds its aggregate history budget"))
 		}
-		inspected, err := e.inspectHistoricalPackage(ctx, reader, invocation, runs, run, target, artifact, attempt, payload)
+		inspected, err := e.inspectHistoricalPackage(ctx, reader, invocation, runs, run, target, artifact, attempt, payload, len(frontier) > 0)
 		if err != nil {
 			return hold(err)
 		}
+		if inspected["kind"] == "prepared-terminal" {
+			chain, err = appendPreparedTerminal(chain, target, observed, attempts, inspected["record"].(Object), invocation.RunID, invocation.Attempt, e)
+			if err != nil {
+				return hold(err)
+			}
+			if err := persistPackageJSON(root, "settlement-chain.json", chain); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if inspected["kind"] == "terminal" {
+			if len(frontier) != 0 {
+				return hold(errors.New("an open prepared frontier is followed by a terminal attempt without direct source lineage"))
+			}
 			chain, err = e.AppendSettlement(chain, target, observed, attempts, inspected["record"].(Object), invocation.RunID, invocation.Attempt)
 			if err != nil {
 				return hold(err)
@@ -299,31 +490,42 @@ func (e *Engine) Recover(ctx context.Context, reader ActionsReader, invocation I
 			}
 			continue
 		}
-		if len(pending) != 1 {
-			return hold(errors.New("an interrupted attempt must be the only unsettled predecessor before it can be restored"))
+		if inspected["kind"] == "prepared" {
+			source := inspected["source"].(Object)
+			chain, err = appendPreparedFrontier(chain, target, observed, attempts, preparedFrontierEntry("prepared", source), invocation.RunID, invocation.Attempt, e)
+			if err != nil {
+				return hold(err)
+			}
+			frontierPayloads[preparedFrontierKey(runID, attempt)] = payload
+			if err := persistPackageJSON(root, "settlement-chain.json", chain); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if inspected["kind"] != "source" {
+			return hold(errors.New("historical attempt has no supported recovery proof"))
 		}
 		source := inspected["source"].(Object)
 		runContext := inspected["context"].(Object)
-		// Preserve exact original bytes in a separate proof before updating only
-		// observer metadata. Planning files and durable journal IDs are reused.
-		if err := restorePackageExceptFrontier(payload, root); err != nil {
+		if source["publication"] == nil && len(frontier) > 0 {
+			chain, err = appendPreparedFrontier(chain, target, observed, attempts, preparedFrontierEntry("journaled", source), invocation.RunID, invocation.Attempt, e)
+			if err != nil {
+				return hold(err)
+			}
+			frontierPayloads[preparedFrontierKey(runID, attempt)] = payload
+			if err := persistPackageJSON(root, "settlement-chain.json", chain); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if len(pending) != 1 || runContext["recovered_from_run_id"] != nil || runContext["recovered_from_attempt"] != nil {
+			return hold(errors.New("an unqualified interrupted attempt must be the only unsettled predecessor before it can be restored"))
+		}
+		result, err := e.restoreRecoveredSource(payload, source, runContext, current, runID, attempt, invocation, target, chain, root, artifactName)
+		if err != nil {
 			return nil, err
 		}
-		if err := persistPackageJSON(root, "settlement-chain.json", chain); err != nil {
-			return nil, err
-		}
-		if err := persistPackageJSON(root, "recovery-source.json", source); err != nil {
-			return nil, err
-		}
-		runContext["workflow_run_id"] = invocation.RunID
-		runContext["workflow_run_attempt"] = invocation.Attempt
-		runContext["run_name"] = invocation.RunName
-		runContext["recovered_from_run_id"] = runID
-		runContext["recovered_from_attempt"] = attempt
-		if err := persistPackageJSON(root, "run-context.json", runContext); err != nil {
-			return nil, err
-		}
-		return Object{"outcome": "resumed", "reason": "restored the exact original target, plans and durable journals", "artifact_name": artifactName}, nil
+		return result, nil
 	}
 }
 
@@ -340,7 +542,8 @@ func restorePackageExceptFrontier(payload []byte, root string) error {
 		return err
 	}
 	for name, data := range files {
-		if name == "settlement-chain.json" {
+		if name == "settlement-chain.json" || name == "recovery-source.json" || name == "recovery-observation.json" ||
+			name == preparedQualificationPath || name == "recovery-needed.json" {
 			continue
 		}
 		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(name))); !errors.Is(err, os.ErrNotExist) {

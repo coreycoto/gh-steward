@@ -33,6 +33,47 @@ func reviewedDispatchPolicy(sourceSHAs []any) Object {
 	}
 }
 
+func TestReviewedDispatchInputNamesFollowWorkflowIdentifiers(t *testing.T) {
+	for _, tc := range []struct {
+		name, approval, reviewed, required string
+		valid                              bool
+	}{
+		{"hyphenated", "approve-plan-sha", "reviewed-run-id", "apply-changes", true},
+		{"underscores", "approve_plan_sha", "reviewed_plan_run_id", "apply_changes", true},
+		{"mixed-case", "ApprovePlan", "ReviewedRun", "ApplyChanges", true},
+		{"leading-underscore", "_approval", "_reviewed", "_apply", true},
+		{"same-selector", "approval", "approval", "apply", false},
+		{"empty-approval", "", "reviewed_run", "apply", false},
+		{"path-approval", "../approval", "reviewed_run", "apply", false},
+		{"space-selector", "approval", "reviewed run", "apply", false},
+		{"numeric-selector", "approval", "1run", "apply", false},
+		{"expression-selector", "approval", "${{ inputs.run }}", "apply", false},
+		{"unbounded-selector", "approval", strings.Repeat("a", 82), "apply", false},
+		{"path-requirement", "approval", "reviewed_run", "../apply", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := reviewedDispatchPolicy([]any{})
+			approval := policy["workflows"].(Object)["task.yml"].(Object)["plans"].(Object)["sync"].(Object)["approval"].(Object)
+			approval["approval_input"], approval["reviewed_run_input"] = tc.approval, tc.reviewed
+			approval["required_inputs"] = Object{tc.required: true}
+			engine, err := NewEngine(policy, policyTestRepository(t))
+			if !tc.valid {
+				if err == nil {
+					t.Fatal("invalid workflow input selector created an executable policy")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed := engine.workflows["task.yml"].plans["sync"].approval
+			if parsed.approvalInput != tc.approval || parsed.reviewedRunInput != tc.reviewed || parsed.requiredInputs[tc.required] != true {
+				t.Fatal("workflow input spelling changed during policy parsing")
+			}
+		})
+	}
+}
+
 func workflowNoopPolicy() Object {
 	return Object{
 		"schema_version": 1,

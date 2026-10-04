@@ -11,6 +11,7 @@ import (
 )
 
 var policyPlanName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var workflowInputName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,80}$`)
 
 type Engine struct {
 	repository contract.Repository
@@ -29,6 +30,13 @@ type planPolicy struct {
 	allowedOps                      map[string]bool
 	event                           *eventPolicy
 	parentMerge                     *parentMergePolicy
+	preparedRecovery                *preparedRecoveryPolicy
+}
+
+type preparedRecoveryPolicy struct {
+	sourceSHA256 string
+	mutators     []Object
+	previous     map[string][]Object
 }
 
 type eventPolicy struct{ kind, path string }
@@ -156,7 +164,9 @@ func parseWorkflowPolicy(value any, workflow string) (workflowPolicy, error) {
 }
 
 func parsePlanPolicy(value any, workflow, name string) (planPolicy, error) {
-	raw, err := Exact(value, []string{"command", "domain_profile", "allowed_operation_kinds", "attempt_target", "approval", "event", "parent_merge"}, "workflow plan policy")
+	raw, err := exactWithOptional(value,
+		[]string{"command", "domain_profile", "allowed_operation_kinds", "attempt_target", "approval", "event", "parent_merge"},
+		[]string{"prepared_recovery"}, "workflow plan policy")
 	if err != nil {
 		return planPolicy{}, err
 	}
@@ -232,11 +242,86 @@ func parsePlanPolicy(value any, workflow, name string) (planPolicy, error) {
 			return planPolicy{}, recoveryError("plan %s has an unsupported parent-merge continuation", name)
 		}
 	}
-	policy := planPolicy{command, profile, attempt, approval, allowed, event, parent}
+	var prepared *preparedRecoveryPolicy
+	if raw["prepared_recovery"] != nil {
+		prepared, err = parsePreparedRecoveryPolicy(raw["prepared_recovery"], name)
+		if err != nil {
+			return planPolicy{}, err
+		}
+	}
+	policy := planPolicy{command: command, profile: profile, attemptTarget: attempt, approval: approval,
+		allowedOps: allowed, event: event, parentMerge: parent, preparedRecovery: prepared}
 	if err := validatePlanPolicyCombination(policy, workflow, name); err != nil {
 		return planPolicy{}, err
 	}
 	return policy, nil
+}
+
+func parsePreparedRecoveryPolicy(value any, planName string) (*preparedRecoveryPolicy, error) {
+	fields, err := exactWithOptional(value,
+		[]string{"workflow_source_sha256", "mutators"}, []string{"previous_sources"}, "prepared recovery policy")
+	if err != nil {
+		return nil, err
+	}
+	digest, ok := fields["workflow_source_sha256"].(string)
+	if !ok || !IsSHA256(digest) {
+		return nil, recoveryError("plan %s prepared recovery requires an exact workflow source digest", planName)
+	}
+	mutators, err := parsePreparedMutators(fields["mutators"], planName)
+	if err != nil {
+		return nil, err
+	}
+	previous := map[string][]Object{}
+	if fields["previous_sources"] != nil {
+		rows, err := array(fields["previous_sources"], "prepared recovery prior sources")
+		if err != nil || len(rows) > 64 {
+			return nil, recoveryError("plan %s has a malformed or oversized prepared recovery source history", planName)
+		}
+		for _, row := range rows {
+			prior, err := Exact(row, []string{"workflow_source_sha256", "mutators"}, "prepared recovery prior source")
+			if err != nil {
+				return nil, err
+			}
+			priorDigest, ok := prior["workflow_source_sha256"].(string)
+			if !ok || !IsSHA256(priorDigest) || priorDigest == digest || previous[priorDigest] != nil {
+				return nil, recoveryError("plan %s has a duplicated or invalid prior prepared workflow source", planName)
+			}
+			priorMutators, err := parsePreparedMutators(prior["mutators"], planName)
+			if err != nil {
+				return nil, err
+			}
+			previous[priorDigest] = priorMutators
+		}
+	}
+	return &preparedRecoveryPolicy{sourceSHA256: digest, mutators: mutators, previous: previous}, nil
+}
+
+func parsePreparedMutators(value any, planName string) ([]Object, error) {
+	rows, err := array(value, "prepared recovery mutation jobs")
+	if err != nil || len(rows) == 0 || len(rows) > 128 {
+		return nil, recoveryError("plan %s requires a bounded nonempty prepared recovery mutation-job inventory", planName)
+	}
+	seenJobs := map[string]bool{}
+	result := make([]Object, 0, len(rows))
+	totalSteps := 0
+	for _, row := range rows {
+		entry, err := Exact(row, []string{"job", "steps"}, "prepared recovery mutation job")
+		if err != nil {
+			return nil, err
+		}
+		job, ok := entry["job"].(string)
+		steps, stepsErr := stringsArray(entry["steps"], "prepared recovery mutation steps", true)
+		if !ok || !nonemptyString(job) || seenJobs[job] || stepsErr != nil || len(steps) > 512 {
+			return nil, recoveryError("plan %s has an invalid or duplicated prepared recovery mutation job", planName)
+		}
+		seenJobs[job] = true
+		totalSteps += len(steps)
+		if totalSteps > 512 {
+			return nil, recoveryError("plan %s prepared recovery mutation inventory exceeds its step bound", planName)
+		}
+		result = append(result, Object{"job": job, "steps": steps})
+	}
+	return result, nil
 }
 
 func parseApprovalPolicy(value any, name string) (approvalPolicy, error) {
@@ -255,7 +340,7 @@ func parseApprovalPolicy(value any, name string) (approvalPolicy, error) {
 		}
 		approvalInput, aOK := fields["approval_input"].(string)
 		runInput, rOK := fields["reviewed_run_input"].(string)
-		if !aOK || !nativeCommandPattern.MatchString(approvalInput) || !rOK || !nativeCommandPattern.MatchString(runInput) || approvalInput == runInput {
+		if !aOK || !workflowInputName.MatchString(approvalInput) || !rOK || !workflowInputName.MatchString(runInput) || approvalInput == runInput {
 			return approvalPolicy{}, recoveryError("plan %s has invalid reviewed dispatch input names", name)
 		}
 		required, err := object(fields["required_inputs"], "required workflow-dispatch input contract")
@@ -266,7 +351,7 @@ func parseApprovalPolicy(value any, name string) (approvalPolicy, error) {
 			return approvalPolicy{}, recoveryError("plan %s has an unsupported required dispatch input count", name)
 		}
 		for input, expected := range required {
-			if !nativeCommandPattern.MatchString(input) || !(expected == true || nonemptyString(expected)) {
+			if !workflowInputName.MatchString(input) || !(expected == true || nonemptyString(expected)) {
 				return approvalPolicy{}, recoveryError("plan %s has an invalid exact dispatch input requirement", name)
 			}
 		}
@@ -1233,7 +1318,12 @@ func operationObjects(operations []contract.Operation) []any {
 
 func contextRunOrigin(context Object) (int64, int64) {
 	runValue, attemptValue := context["workflow_run_id"], context["workflow_run_attempt"]
-	if context["recovered_from_run_id"] != nil || context["recovered_from_attempt"] != nil {
+	if context["plan_origin_run_id"] != nil || context["plan_origin_attempt"] != nil {
+		if context["plan_origin_run_id"] == nil || context["plan_origin_attempt"] == nil {
+			return 0, 0
+		}
+		runValue, attemptValue = context["plan_origin_run_id"], context["plan_origin_attempt"]
+	} else if context["recovered_from_run_id"] != nil || context["recovered_from_attempt"] != nil {
 		if context["recovered_from_run_id"] == nil || context["recovered_from_attempt"] == nil {
 			return 0, 0
 		}
