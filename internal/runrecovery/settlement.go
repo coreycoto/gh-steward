@@ -14,6 +14,7 @@ import (
 
 const settlementSchemaVersion = int64(4)
 const legacySettlementSchemaVersion = int64(5)
+const historyCutoverSettlementSchemaVersion = int64(6)
 const maxHistoryRuns = 100_000
 const maxPendingAttempts = 100_000
 
@@ -28,6 +29,7 @@ var (
 	immutableRunFields  = []string{"id", "created_at", "display_title", "event", "workflow_id", "head_branch", "head_sha"}
 	targetFields        = []string{"workflow_file", "repository", "server_url", "workflow_id", "recovery_key"}
 	chainFields         = []string{"schema_version", "target", "inventory", "settlements", "prepared_frontier", "prepared_terminal_proofs", "sha256"}
+	cutoverChainFields  = []string{"schema_version", "target", "history_cutover", "inventory", "settlements", "prepared_frontier", "prepared_terminal_proofs", "sha256"}
 	inventoryFields     = []string{"run", "settled_attempt"}
 	recordFields        = []string{"run_id", "attempt", "run", "attempt_target", "artifact", "context_file", "settlement"}
 	artifactFields      = []string{"name", "id", "digest"}
@@ -258,6 +260,34 @@ func EmptyChain(targetValue any) (Object, error) {
 	unsigned, err := Canonical(chain)
 	if err != nil {
 		return nil, err
+	}
+	chain["sha256"] = SHA256(unsigned)
+	return chain, nil
+}
+
+// HistoryCutoverChain starts a schema-6 chain with a separately sealed
+// preview-only baseline. The baseline is deliberately not copied into native
+// settlement or inventory rows.
+func HistoryCutoverChain(targetValue, baselineValue any) (Object, error) {
+	target, err := ValidateTarget(targetValue)
+	if err != nil {
+		return nil, err
+	}
+	baseline, err := ValidateHistoryCutover(baselineValue)
+	if err != nil {
+		return nil, err
+	}
+	if !Equal(target, baseline["target"]) {
+		return nil, recoveryError("history cutover baseline is for another checkpoint target")
+	}
+	chain := Object{
+		"schema_version": historyCutoverSettlementSchemaVersion, "target": target,
+		"history_cutover": baseline, "inventory": []any{}, "settlements": []any{},
+		"prepared_frontier": []any{}, "prepared_terminal_proofs": []any{},
+	}
+	unsigned, err := Canonical(chain)
+	if err != nil || len(unsigned) > MaxCheckpointBytes {
+		return nil, recoveryError("history cutover checkpoint exceeds the explicit safety bound")
 	}
 	chain["sha256"] = SHA256(unsigned)
 	return chain, nil
@@ -662,12 +692,32 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 	if err != nil {
 		return nil, err
 	}
-	chain, err := Exact(value, chainFields, "settlement checkpoint")
+	rawChain, err := object(value, "settlement checkpoint")
 	if err != nil {
 		return nil, err
 	}
-	if (!exactInt(chain["schema_version"], settlementSchemaVersion) && !exactInt(chain["schema_version"], legacySettlementSchemaVersion)) || !Equal(chain["target"], target) {
+	version, versionErr := contract.Integer(rawChain["schema_version"])
+	fields := chainFields
+	if version == historyCutoverSettlementSchemaVersion {
+		fields = cutoverChainFields
+	}
+	chain, err := Exact(rawChain, fields, "settlement checkpoint")
+	if err != nil {
+		return nil, err
+	}
+	if versionErr != nil || (version != settlementSchemaVersion && version != legacySettlementSchemaVersion && version != historyCutoverSettlementSchemaVersion) || !Equal(chain["target"], target) {
 		return nil, recoveryError("settlement checkpoint is for another repository or workflow target")
+	}
+	cutoverHighwaters := map[int64]int64{}
+	if version == historyCutoverSettlementSchemaVersion {
+		baseline, err := e.ValidateReviewedHistoryCutover(chain["history_cutover"], target)
+		if err != nil {
+			return nil, err
+		}
+		cutoverHighwaters, err = validateHistoryCutoverPrefix(baseline, observed, observedAttempts)
+		if err != nil {
+			return nil, err
+		}
 	}
 	inventoryRows, err := array(chain["inventory"], "checkpoint inventory")
 	if err != nil {
@@ -685,7 +735,13 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 	if err != nil || len(preparedProofs) > maxPendingAttempts {
 		return nil, recoveryError("prepared terminal proof inventory is malformed or exceeds its explicit bound")
 	}
-	unsigned := Object{"schema_version": chain["schema_version"], "target": chain["target"], "inventory": chain["inventory"], "settlements": chain["settlements"], "prepared_frontier": chain["prepared_frontier"], "prepared_terminal_proofs": chain["prepared_terminal_proofs"]}
+	if version == historyCutoverSettlementSchemaVersion && (len(preparedFrontier) != 0 || len(preparedProofs) != 0) {
+		return nil, recoveryError("preview-only history cutover cannot contain resumable plans or prepared terminal proofs")
+	}
+	unsigned := Object{}
+	for _, field := range fields[:len(fields)-1] {
+		unsigned[field] = chain[field]
+	}
 	canonical, err := Canonical(unsigned)
 	if err != nil || !IsSHA256(chain["sha256"]) || SHA256(canonical) != chain["sha256"] {
 		return nil, recoveryError("settlement checkpoint digest is invalid")
@@ -750,17 +806,27 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 			return nil, recoveryError("typed settlement does not bind a covered immutable run")
 		}
 		priorAttempts := recordsByRun[runID]
-		if int64(len(priorAttempts))+1 != attempt {
+		if int64(len(priorAttempts))+cutoverHighwaters[runID]+1 != attempt {
 			return nil, recoveryError("settlement checkpoint has a repeated, missing or out-of-order attempt record")
 		}
-		if err := validateNoopFrontier(record, settledPrefix); err != nil {
+		var noopHistoryDigest []string
+		if version == historyCutoverSettlementSchemaVersion {
+			baseline, _ := object(chain["history_cutover"], "history cutover baseline")
+			noopHistoryDigest = []string{fmt.Sprint(baseline["sha256"])}
+		}
+		if err := validateNoopFrontier(record, settledPrefix, noopHistoryDigest...); err != nil {
 			return nil, err
 		}
 		if isLegacyRecord(record) {
-			if !exactInt(chain["schema_version"], legacySettlementSchemaVersion) {
+			if version != legacySettlementSchemaVersion {
 				return nil, recoveryError("legacy settlement requires explicitly reviewed chain version 5")
 			}
 			if err := validateLegacyFrontier(record, settledPrefix); err != nil {
+				return nil, err
+			}
+		}
+		if version == historyCutoverSettlementSchemaVersion {
+			if err := validatePreviewOnlySettlement(record); err != nil {
 				return nil, err
 			}
 		}
@@ -770,7 +836,10 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 	for runID, item := range coveredByID {
 		attempts := recordsByRun[runID]
 		frontier := mustPositive(item["settled_attempt"])
-		if int64(len(attempts)) != frontier {
+		if cutoverHighwaters[runID] > 0 && len(attempts) == 0 {
+			return nil, recoveryError("schema-6 baseline must remain outside native checkpoint inventory")
+		}
+		if int64(len(attempts))+cutoverHighwaters[runID] != frontier {
 			return nil, recoveryError("settlement checkpoint has a missing or out-of-order attempt record")
 		}
 		latest, exists := observedAttempts[runID]
@@ -787,6 +856,30 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 		return nil, err
 	}
 	return chain, nil
+}
+
+func validatePreviewOnlySettlement(record Object) error {
+	settlement, err := object(record["settlement"], "preview-only settlement")
+	if err != nil || settlement["kind"] != "terminal" || settlement["publication"] != nil {
+		return recoveryError("preview-only history cutover accepts no publication or legacy settlement")
+	}
+	plans, err := array(settlement["plans"], "preview-only terminal plans")
+	if err != nil || len(plans) != 1 {
+		return recoveryError("preview-only history cutover permits only one exact zero-operation workflow-noop plan")
+	}
+	proof, err := object(plans[0], "preview-only workflow-noop plan proof")
+	if err != nil || proof["name"] != "workflow-noop" || proof["command"] != "workflow-noop" {
+		return recoveryError("preview-only history cutover permits only the exact workflow-noop plan")
+	}
+	terminal, err := ValidateTerminalPlanProof(proof)
+	if err != nil || terminal["command"] != "workflow-noop" {
+		return recoveryError("preview-only history cutover requires a valid native zero-operation receipt")
+	}
+	parsed, parseErr := contract.ParsePlan(terminal)
+	if err != nil || parseErr != nil || parsed.Command != "workflow-noop" || len(parsed.Operations) != 0 {
+		return recoveryError("preview-only history cutover requires a zero-operation workflow-noop plan")
+	}
+	return nil
 }
 
 // ValidateCheckpointArtifact binds sidecar metadata to the exact attempt it settles.
@@ -876,12 +969,34 @@ func (e *Engine) SelectCheckpoint(candidates []Object, target any, observed []Ob
 		return nil, nil
 	}
 	valid := make([]Object, 0, len(candidates))
+	cutoverDigest := ""
+	hasCutover := false
 	for _, candidate := range candidates {
 		checked, err := e.ValidateChain(candidate, target, observed, attempts)
 		if err != nil {
 			return nil, err
 		}
+		if exactInt(checked["schema_version"], historyCutoverSettlementSchemaVersion) {
+			baseline, err := ValidateHistoryCutover(checked["history_cutover"])
+			if err != nil {
+				return nil, err
+			}
+			digest := fmt.Sprint(baseline["sha256"])
+			if hasCutover && digest != cutoverDigest {
+				return nil, recoveryError("available schema-6 checkpoints contain different reviewed history cutovers")
+			}
+			hasCutover, cutoverDigest = true, digest
+		} else if hasCutover {
+			return nil, recoveryError("schema-6 and pre-cutover checkpoints form incompatible histories")
+		}
 		valid = append(valid, checked)
+	}
+	if hasCutover {
+		for _, chain := range valid {
+			if !exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
+				return nil, recoveryError("schema-6 and pre-cutover checkpoints form incompatible histories")
+			}
+		}
 	}
 	longest := valid[0]
 	longestSettlements := longest["settlements"].([]any)
@@ -957,6 +1072,17 @@ func PendingAttempts(chainValue Object, observed []Object, latest map[int64]int6
 		return nil, recoveryError("complete workflow history exceeds its bound or has an inconsistent attempt inventory")
 	}
 	covered := map[int64]int64{}
+	baselineHighwaters := map[int64]int64{}
+	if exactInt(chainValue["schema_version"], historyCutoverSettlementSchemaVersion) {
+		baseline, err := ValidateHistoryCutover(chainValue["history_cutover"])
+		if err != nil {
+			return nil, err
+		}
+		baselineHighwaters, err = validateHistoryCutoverPrefix(baseline, observed, latest)
+		if err != nil {
+			return nil, err
+		}
+	}
 	items, err := array(chainValue["inventory"], "checkpoint inventory")
 	if err != nil {
 		return nil, err
@@ -977,6 +1103,9 @@ func PendingAttempts(chainValue Object, observed []Object, latest map[int64]int6
 		frontier, err := positiveInteger(item["settled_attempt"], "checkpoint attempt frontier")
 		if err != nil {
 			return nil, err
+		}
+		if baselineHighwaters[id] > 0 && frontier < baselineHighwaters[id] {
+			return nil, recoveryError("schema-6 native inventory is behind its separately retained quarantine boundary")
 		}
 		covered[id] = frontier
 	}
@@ -1005,6 +1134,9 @@ func PendingAttempts(chainValue Object, observed []Object, latest map[int64]int6
 			limit = currentAttempt - 1
 		}
 		frontier := covered[id]
+		if baselineHighwaters[id] > frontier {
+			frontier = baselineHighwaters[id]
+		}
 		if frontier < limit {
 			first := frontier + 1
 			count := limit - frontier
@@ -1096,8 +1228,18 @@ func (e *Engine) AppendSettlement(chainValue Object, target any, observed []Obje
 	if !settlesCurrent && !settlesEarliest {
 		return nil, recoveryError("only the earliest unsettled prior attempt or the fully-preceded current attempt may advance the checkpoint")
 	}
-	if err := validateNoopFrontier(record, chain["settlements"].([]any)); err != nil {
+	var noopHistoryDigest []string
+	if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
+		baseline, _ := object(chain["history_cutover"], "history cutover baseline")
+		noopHistoryDigest = []string{fmt.Sprint(baseline["sha256"])}
+	}
+	if err := validateNoopFrontier(record, chain["settlements"].([]any), noopHistoryDigest...); err != nil {
 		return nil, err
+	}
+	if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
+		if err := validatePreviewOnlySettlement(record); err != nil {
+			return nil, err
+		}
 	}
 	if isLegacyRecord(record) {
 		if !exactInt(chain["schema_version"], legacySettlementSchemaVersion) {
@@ -1129,7 +1271,21 @@ func (e *Engine) AppendSettlement(chainValue Object, target any, observed []Obje
 		}
 	}
 	if item == nil {
-		item = Object{"run": record["run"], "settled_attempt": int64(0)}
+		frontier := int64(0)
+		if exactInt(result["schema_version"], historyCutoverSettlementSchemaVersion) {
+			baseline, err := ValidateHistoryCutover(result["history_cutover"])
+			if err != nil {
+				return nil, err
+			}
+			rows, _ := objectArray(baseline["run_inventory"], "history cutover run inventory")
+			for _, row := range rows {
+				if exactInt(row["id"], runID) {
+					frontier = mustPositive(row["run_attempt"])
+					break
+				}
+			}
+		}
+		item = Object{"run": record["run"], "settled_attempt": frontier}
 		inventory = append(inventory, item)
 	}
 	if !Equal(item["run"], record["run"]) || mustPositive(record["attempt"]) != mustNonnegative(item["settled_attempt"])+1 {

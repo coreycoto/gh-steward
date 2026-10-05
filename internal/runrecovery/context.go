@@ -575,12 +575,26 @@ func (e *Engine) SetContextPhase(root, phase, reason string) (Object, error) {
 
 // MarkContextPlan advances one plan monotonically and records completion only
 // after its full native v2 plan, journal and apply result validate.
+func rejectPreviewOnlyCutoverRoot(e *Engine, root, workflow, operation string) error {
+	cutover, err := e.previewOnlyCutoverAtRoot(root, workflow)
+	if err != nil {
+		return err
+	}
+	if cutover {
+		return recoveryError("preview-only history cutover forbids %s", operation)
+	}
+	return nil
+}
+
 func (e *Engine) MarkContextPlan(root, name, status string) (Object, error) {
 	if status != "dispatching" && status != "completed" {
 		return nil, recoveryError("context plan transition is unsupported")
 	}
 	context, err := e.readRunContext(root)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectPreviewOnlyCutoverRoot(e, root, fmt.Sprint(context["workflow_file"]), "plan transition"); err != nil {
 		return nil, err
 	}
 	entry, err := contextPlanByName(context, name)
@@ -644,6 +658,9 @@ func (e *Engine) MarkContextPlan(root, name, status string) (Object, error) {
 func (e *Engine) CaptureJournal(root, journalRoot, name string) (Object, error) {
 	context, err := e.readRunContext(root)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectPreviewOnlyCutoverRoot(e, root, fmt.Sprint(context["workflow_file"]), "journal capture"); err != nil {
 		return nil, err
 	}
 	entry, err := contextPlanByName(context, name)
@@ -752,6 +769,9 @@ func validateJournalAdvance(previous, current Object, plan contract.Plan, journa
 func (e *Engine) InstallRestoredJournal(root, journalRoot, name string) (Object, error) {
 	context, err := e.readRunContext(root)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectPreviewOnlyCutoverRoot(e, root, fmt.Sprint(context["workflow_file"]), "journal installation"); err != nil {
 		return nil, err
 	}
 	entry, err := contextPlanByName(context, name)

@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.3.0 — Unreleased
+## 0.4.0 — Unreleased
+
+- Add read-only cutover previews for complete terminal workflow histories whose original evidence is unavailable. Preserve every old attempt as unknown and quarantined, rather than inventing completion receipts or replaying operations.
+- Introduce explicitly reviewed, preview-only schema-6 checkpoints. Bind the exact baseline and keep new attempts and reruns subject to strict native evidence; reject source drift, incompatible checkpoints and scope expansion.
+- Support exact baseline review through a trusted same-repository issue, with complete comment reads, explicit revocation and current maintainer permission checks. This avoids creating additional workflow attempts solely to commit a baseline approval.
+- Keep full cutover evidence in private files and stdout limited to summaries; local validation remains provider-free. Cutover acceptance never authorizes provider mutation or publication.
+
+## 0.3.0 — 2026-10-05
 
 - Add explicit offline legacy evidence review, complete live import previews, and policy-reviewed local history imports under `runs`. Preserve original signed evidence and per-effect dispositions without fabricating native completion receipts.
 - Keep imported history in an immutable private store with exact predecessor links, durable interrupted-import recovery, and separately reviewed import digests.

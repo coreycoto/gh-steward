@@ -21,6 +21,9 @@ const noopDecisionPath = "decisions/workflow-noop.json"
 var noopDecisionFields = []string{"schema_version", "decision", "repository", "server_url", "workflow_file", "run_id", "attempt", "recovery_key", "attempt_target", "workflow_sha", "event_name", "event_sha256"}
 var noopObservationFields = []string{"schema_version", "outcome", "target", "run", "run_id", "attempt", "recovery_key", "chain_sha256", "prepared_frontier_sha256"}
 var noopDataFields = []string{"status", "decision", "proposal", "previews", "decision_sha256", "event_sha256", "observation_sha256", "workflow_api_sha256", "workflow_source_sha256", "jobs_sha256", "chain_sha256", "run_id", "attempt", "workflow_file", "recovery_key", "attempt_target", "workflow_sha", "event_name", "recovery_outcome"}
+
+const noopHistoryCutoverDigestField = "history_cutover_sha256"
+
 var noopDecisions = map[string]bool{"no-change": true, "preview-only": true, "review-declined": true, "prerequisite-unavailable": true, "ineligible-trigger": true, "already-settled": true}
 
 const MaxNoopPreviewFiles = 64
@@ -223,6 +226,13 @@ func persistRecoveryObservation(root string, invocation Invocation, run, target,
 		return err
 	}
 	observation := Object{"schema_version": 1, "outcome": outcome, "target": target, "run": run, "run_id": invocation.RunID, "attempt": invocation.Attempt, "recovery_key": invocation.RecoveryKey, "chain_sha256": digest, "prepared_frontier_sha256": frontierDigest}
+	if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
+		baseline, err := ValidateHistoryCutover(chain["history_cutover"])
+		if err != nil {
+			return err
+		}
+		observation[noopHistoryCutoverDigestField] = baseline["sha256"]
+	}
 	return persistPackageJSON(root, "recovery-observation.json", observation)
 }
 
@@ -315,6 +325,14 @@ func (e *Engine) FinishNoop(ctx context.Context, reader ActionsReader, options N
 	if err != nil || len(pending) != 0 {
 		return nil, errors.New("no-op cannot bypass an unsettled predecessor")
 	}
+	var expectedCutoverDigest any
+	if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
+		baseline, err := e.ValidateReviewedHistoryCutover(chain["history_cutover"], target)
+		if err != nil {
+			return nil, err
+		}
+		expectedCutoverDigest = baseline["sha256"]
+	}
 	observationBytes, err := ReadPackageFile(root, "recovery-observation.json")
 	if err != nil {
 		return nil, err
@@ -323,7 +341,7 @@ func (e *Engine) FinishNoop(ctx context.Context, reader ActionsReader, options N
 	if err != nil {
 		return nil, err
 	}
-	observation, err := Exact(observationValue, noopObservationFields, "current recovery observation")
+	observation, err := exactWithOptional(observationValue, noopObservationFields, []string{noopHistoryCutoverDigestField}, "current recovery observation")
 	if err != nil {
 		return nil, err
 	}
@@ -337,6 +355,9 @@ func (e *Engine) FinishNoop(ctx context.Context, reader ActionsReader, options N
 	}
 	if !Equal(observation["target"], target) || !Equal(observation["run"], run) || !exactInt(observation["run_id"], options.RunID) || !exactInt(observation["attempt"], options.Attempt) || observation["recovery_key"] != options.RecoveryKey || observation["chain_sha256"] != prefixDigest || observation["prepared_frontier_sha256"] != frontierDigest {
 		return nil, errors.New("current no-op lost the exact fresh or fully settled recovery observation")
+	}
+	if !Equal(observation[noopHistoryCutoverDigestField], expectedCutoverDigest) {
+		return nil, errors.New("current no-op lost its exact reviewed history cutover identity")
 	}
 	eventBytes, err := ReadPackageFile(root, "events/trigger-event.json")
 	if err != nil {
@@ -378,6 +399,9 @@ func (e *Engine) FinishNoop(ctx context.Context, reader ActionsReader, options N
 		"event_sha256": SHA256(eventBytes), "observation_sha256": SHA256(observationBytes), "chain_sha256": prefixDigest,
 		"run_id": options.RunID, "attempt": options.Attempt, "workflow_file": options.Workflow, "recovery_key": options.RecoveryKey,
 		"attempt_target": runContext["attempt_target"], "workflow_sha": options.WorkflowSHA, "event_name": run["event"], "recovery_outcome": observation["outcome"],
+	}
+	if expectedCutoverDigest != nil {
+		data[noopHistoryCutoverDigestField] = expectedCutoverDigest
 	}
 	for relative, value := range map[string]Object{"events/workflow-source.json": sourcePacket, "events/current-jobs.json": jobsPacket} {
 		if err := persistPackageJSON(root, relative, value); err != nil {
@@ -483,7 +507,7 @@ func (e *Engine) validateWorkflowNoop(runContext, entry, plan Object, reader *po
 			return errors.New("workflow no-op cannot reinterpret publication or recovery evidence")
 		}
 	}
-	data, err := Exact(plan["data"], noopDataFields, "workflow no-op data")
+	data, err := exactWithOptional(plan["data"], noopDataFields, []string{noopHistoryCutoverDigestField}, "workflow no-op data")
 	if err != nil || data["status"] != "completed" {
 		return errors.New("workflow no-op data is not terminal")
 	}
@@ -534,7 +558,7 @@ func (e *Engine) validateWorkflowNoop(runContext, entry, plan Object, reader *po
 	if err != nil {
 		return err
 	}
-	observation, err = Exact(observation, noopObservationFields, "workflow no-op history observation")
+	observation, err = exactWithOptional(observation, noopObservationFields, []string{noopHistoryCutoverDigestField}, "workflow no-op history observation")
 	if err != nil {
 		return err
 	}
@@ -604,6 +628,9 @@ func (e *Engine) validateWorkflowNoop(runContext, entry, plan Object, reader *po
 	}
 	if !exactInt(observation["run_id"], runID) || !exactInt(observation["attempt"], attempt) || observation["recovery_key"] != runContext["recovery_key"] || data["decision"] != name || data["recovery_outcome"] != outcome || decision["repository"] != e.repository.FullName() || decision["server_url"] != "https://"+e.repository.Host {
 		return errors.New("workflow no-op decision belongs to another exact invocation")
+	}
+	if !Equal(data[noopHistoryCutoverDigestField], observation[noopHistoryCutoverDigestField]) || (observation[noopHistoryCutoverDigestField] != nil && !IsSHA256(observation[noopHistoryCutoverDigestField])) {
+		return errors.New("workflow no-op changed its exact history cutover identity")
 	}
 	repository, err := object(event["repository"], "no-op trigger repository")
 	if err != nil || repository["full_name"] != e.repository.FullName() {
@@ -678,7 +705,7 @@ func (e *Engine) validateWorkflowNoop(runContext, entry, plan Object, reader *po
 
 // validateNoopFrontier binds each no-op to the immutable prefix preceding it.
 // It avoids embedding the growing checkpoint recursively in every plan proof.
-func validateNoopFrontier(record Object, prefix []any) error {
+func validateNoopFrontier(record Object, prefix []any, expectedCutoverDigest ...string) error {
 	settled, err := object(record["settlement"], "settlement")
 	if err != nil {
 		return err
@@ -706,9 +733,20 @@ func validateNoopFrontier(record Object, prefix []any) error {
 		if err != nil {
 			return err
 		}
-		data, err := object(plan["data"], "workflow no-op data")
+		data, err := exactWithOptional(plan["data"], noopDataFields, []string{noopHistoryCutoverDigestField}, "workflow no-op data")
 		if err != nil {
 			return err
+		}
+		wantCutoverDigest := ""
+		if len(expectedCutoverDigest) > 0 {
+			wantCutoverDigest = expectedCutoverDigest[0]
+		}
+		var expected any
+		if wantCutoverDigest != "" {
+			expected = wantCutoverDigest
+		}
+		if !Equal(data[noopHistoryCutoverDigestField], expected) {
+			return errors.New("workflow no-op history cutover identity differs from its checkpoint boundary")
 		}
 		digest, err := settlementPrefixDigest(prefix)
 		if err != nil || data["chain_sha256"] != digest {

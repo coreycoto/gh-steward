@@ -19,6 +19,13 @@ func (e *Engine) AcquirePublicationCandidate(ctx context.Context, reader Actions
 	if err != nil {
 		return nil, err
 	}
+	cutover, err := e.previewOnlyCutoverAtRoot(root, inv.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	if cutover {
+		return nil, errors.New("preview-only history cutover disables publication")
+	}
 	files, err := retainedPackageFiles(root)
 	if err != nil || len(files) != 2 {
 		return nil, errors.New("publication acquisition requires only a fresh recovery frontier and observation")

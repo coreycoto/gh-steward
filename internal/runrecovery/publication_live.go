@@ -24,6 +24,13 @@ func (e *Engine) VerifyPublication(ctx context.Context, reader ActionsReader, in
 	if err != nil {
 		return nil, err
 	}
+	cutover, err := e.previewOnlyCutoverAtRoot(root, invocation.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	if cutover {
+		return nil, errors.New("preview-only history cutover disables publication")
+	}
 	if !e.workflowAllowsPublication(invocation.Workflow) {
 		return nil, errors.New("consumer policy does not allow this publication workflow")
 	}
