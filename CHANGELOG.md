@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.2.0 — Unreleased
+## 0.2.1 — Unreleased
+
+- Fix Project fields and items query selections so each field remains a separate GraphQL selection.
+- Align workflow Project-field checks with normalized types and named option identities.
+- Add offline native plan extraction and validation, plus direct Go-plan registration for workflow recovery contexts.
+
+## 0.2.0 — 2026-10-04
 
 - Add shared native workflow-history recovery, immutable job handoffs, terminal receipt validation, and uploaded-package checkpoint finalization under `runs`.
 - Require a durable publication qualification bound to the exact trusted workflow, candidate bytes, successful verification job, and immutable artifact identities before publication recovery can advance.

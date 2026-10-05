@@ -5,7 +5,7 @@ description: Integrate or diagnose gh-steward recovery across GitHub Actions att
 
 Use the native `gh steward runs` commands for shared recovery mechanics. Keep consumer-specific approval, event, and domain policy in the trusted checkout; keep shell adapters thin. Read [the protocol reference](references/run-protocol.md) when implementing a workflow or interpreting a held package.
 
-Confirm the staged executable's release version, source revision, clean-source flag, checksum, and provenance before using it. The `runs` commands first appear in the 0.2.0 candidate; 0.1.0 does not support them. Installing this plugin does not install the CLI or authorize writes.
+Confirm the staged executable's release version, source revision, clean-source flag, checksum, and provenance before using it. The `runs` commands shipped in 0.2.0; 0.1.0 does not support them. Installing this plugin does not install the CLI or authorize writes.
 
 Treat the recovery outcomes distinctly:
 

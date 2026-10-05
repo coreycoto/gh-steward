@@ -20,8 +20,11 @@ The authored payload is a structured object with exactly these fields:
 
 `quarter` must be `YYYY QN`; issue numbers are positive whole numbers, and rationale keys must be issue numbers with nonempty text. Prepare and inspect the exact live-backed proposal:
 
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+
 ```sh
-gh steward quarter prepare --input payload=quarter-plan.json --out reviewed-plan.json
+gh steward quarter prepare --repo-root . --repo "$REPOSITORY_URL" --input payload=quarter-plan.json --out quarter-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=quarter-prepare.json --outer-command quarter-backlog-prepare --plan-command quarter-backlog-apply --out reviewed-plan.json
 ```
 
 Review the complete source inventory, current milestone assignments, milestone fields, comments, per-issue rationale, before-values, operations, and `sha256`. Applying can create/update a milestone, add rationale comments, and change issue milestone assignments as separate writes.

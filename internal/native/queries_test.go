@@ -114,3 +114,85 @@ func TestProjectScopeIsExplicitAndAllResultIdentitiesAreChecked(t *testing.T) {
 		f.result.Stdout = original
 	}
 }
+
+func TestProjectPageQueriesSeparateAdjacentSelections(t *testing.T) {
+	const result = `{"data":{"repositoryOwner":{"__typename":"User","login":"planner","projectV2":{"id":"P_14","number":14,"title":"Backlog","url":"https://github.com/users/planner/projects/14","closed":false,"public":false}}}}`
+	cursor := "after-first-page"
+	tests := []struct {
+		name             string
+		section          string
+		selection        string
+		pagination       string
+		additionalChecks []string
+	}{
+		{
+			name:       "fields",
+			section:    "fields",
+			selection:  "public fields(first:100,after:$cursor)",
+			pagination: "pageInfo{hasNextPage endCursor}",
+			additionalChecks: []string{
+				"... on ProjectV2FieldCommon{id name dataType}",
+				"... on ProjectV2MultiSelectField{options:multiSelectOptions{id name}}",
+			},
+		},
+		{
+			name:       "items",
+			section:    "items",
+			selection:  "public items(first:100,after:$cursor,archivedStates:[ARCHIVED,NOT_ARCHIVED])",
+			pagination: "pageInfo{hasNextPage endCursor}",
+			additionalChecks: []string{
+				"fieldValues(first:100)",
+				"content{__typename ... on Issue",
+				"pageInfo{hasNextPage}",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := &fakeExecutor{result: Result{Stdout: []byte(result)}}
+			tpt := transport(f)
+			p := ProjectScope{Host: "github.com", Owner: "planner", OwnerType: "User", Number: 14, ID: "P_14"}
+			if _, err := tpt.ReadProjectPage(context.Background(), p, test.section, &cursor); err != nil {
+				t.Fatal(err)
+			}
+
+			input, err := contract.Decode(strings.NewReader(string(f.input)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			variables, err := contract.ObjectAt(input, "variables")
+			if err != nil {
+				t.Fatal(err)
+			}
+			query, err := contract.String(input, "query")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(query, test.selection) {
+				t.Fatalf("selection boundary missing in generated query: %s", query)
+			}
+			if strings.Contains(query, "publicfields") || strings.Contains(query, "publicitems") {
+				t.Fatalf("adjacent Project selections were concatenated: %s", query)
+			}
+			if variables["owner"] != "planner" || variables["cursor"] != cursor {
+				t.Fatalf("query did not bind the explicit owner and cursor: %#v", variables)
+			}
+			number, err := contract.PositiveInteger(variables["number"])
+			if err != nil || number != p.Number {
+				t.Fatalf("query did not bind the selected Project number: %#v (%v)", variables["number"], err)
+			}
+			if !strings.Contains(query, "... on ProjectV2Owner{projectV2(number:$number){") {
+				t.Fatalf("query lost the typed explicit Project owner selection: %s", query)
+			}
+			if !strings.Contains(query, test.pagination) {
+				t.Fatalf("query lost the complete pagination metadata: %s", query)
+			}
+			for _, fragment := range test.additionalChecks {
+				if !strings.Contains(query, fragment) {
+					t.Fatalf("query omitted expected Project field or item selection %q: %s", fragment, query)
+				}
+			}
+		})
+	}
+}

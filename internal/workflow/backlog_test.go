@@ -42,9 +42,13 @@ func backlogTestInventory(withProject bool) contract.Object {
 			"owner_type": "Organization", "host": "github.com",
 		}
 		fields := contract.Object{
-			"Status":      contract.Object{"id": "FIELD_status", "dataType": "SINGLE_SELECT", "options": []any{contract.Object{"name": "Todo"}, contract.Object{"name": "In Progress"}, contract.Object{"name": "Done"}}},
-			"Priority":    contract.Object{"id": "FIELD_priority", "dataType": "SINGLE_SELECT", "options": []any{contract.Object{"name": "Now"}, contract.Object{"name": "Next"}, contract.Object{"name": "Later"}}},
-			"Queue Order": contract.Object{"id": "FIELD_order", "dataType": "NUMBER", "options": []any{}},
+			"Status": contract.Object{"id": "FIELD_status", "name": "Status", "data_type": "SINGLE_SELECT", "options_by_name": contract.Object{
+				"Todo": contract.Object{"id": "OPT_status_todo", "name": "Todo"}, "In Progress": contract.Object{"id": "OPT_status_progress", "name": "In Progress"}, "Done": contract.Object{"id": "OPT_status_done", "name": "Done"},
+			}},
+			"Priority": contract.Object{"id": "FIELD_priority", "name": "Priority", "data_type": "SINGLE_SELECT", "options_by_name": contract.Object{
+				"Now": contract.Object{"id": "OPT_priority_now", "name": "Now"}, "Next": contract.Object{"id": "OPT_priority_next", "name": "Next"}, "Later": contract.Object{"id": "OPT_priority_later", "name": "Later"},
+			}},
+			"Queue Order": contract.Object{"id": "FIELD_order", "name": "Queue Order", "data_type": "NUMBER", "options_by_name": contract.Object{}},
 		}
 		projects = []any{contract.Object{
 			"repo": repo.Object(), "project": project, "fields_by_name": fields, "items": []any{},

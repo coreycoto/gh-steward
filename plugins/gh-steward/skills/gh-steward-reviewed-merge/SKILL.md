@@ -7,8 +7,12 @@ Use this skill only when the user asks to evaluate or prepare a particular autom
 
 Provide the selected GitHub `workflow_run` event as `event` and an explicit policy as `policy`:
 
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+The prepare output is an envelope; extract its inner plan before review:
+
 ```sh
-gh steward merge prepare --policy merge-policy.json --input event=workflow-run-event.json --out reviewed-plan.json
+gh steward merge prepare --repo-root . --repo "$REPOSITORY_URL" --policy merge-policy.json --input event=workflow-run-event.json --out merge-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=merge-prepare.json --outer-command merge-prepare --plan-command merge-apply --out reviewed-plan.json
 ```
 
 The policy contains `workflow_name`, `workflow_event`, `required_label`, `pass_bucket`, `merge_method`, `branch_patterns`, and `trusted_logins`. These are consumer decisions; do not infer trusted automation, branch patterns, or merge method. Review the captured repository, triggering event, pull request number and exact head, labels, required checks, eligibility findings, before-state, operation, and `sha256`.

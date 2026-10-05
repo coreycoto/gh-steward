@@ -14,8 +14,13 @@ names, SHAs must be the complete current 40-character lowercase commit IDs,
 and PR numbers must be positive whole numbers. Duplicate branches are rejected.
 An empty selection is a verified no-op.
 
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+Preparation writes a result envelope; extract and inspect its inner plan before
+requesting approval:
+
 ```sh
-gh steward branches prepare --repo-root . --input payload=branches.json --out branches-plan.json
+gh steward branches prepare --repo-root . --repo "$REPOSITORY_URL" --input payload=branches.json --out branches-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=branches-prepare.json --outer-command branch-cleanup-prepare --plan-command branch-cleanup-apply --out branches-plan.json
 ```
 
 Preparation captures the complete repository identity, default branch, selected

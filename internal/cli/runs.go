@@ -46,7 +46,18 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 	workflowSHA := flags.String("workflow-sha", "", "trusted control workflow commit SHA")
 	phase := flags.String("phase", "", "exact plan-free context phase")
 	reason := flags.String("reason", "", "bounded context reason")
-	name := flags.String("name", "", "exact native plan name")
+	var name singleRecoveryValue
+	name.flagName = "name"
+	flags.Var(&name, "name", "exact native plan name")
+	var relative, planCommand, reviewPath, reviewSHA256 singleRecoveryValue
+	relative.flagName = "relative"
+	planCommand.flagName = "plan-command"
+	reviewPath.flagName = "review-path"
+	reviewSHA256.flagName = "review-sha256"
+	flags.Var(&relative, "relative", "exact package-relative native plan path for direct context registration")
+	flags.Var(&planCommand, "plan-command", "expected native plan command for direct context registration")
+	flags.Var(&reviewPath, "review-path", "optional package-relative native plan review path")
+	flags.Var(&reviewSHA256, "review-sha256", "optional exact native plan review SHA-256")
 	journalRoot := flags.String("journal-root", "", "native apply engine journal directory")
 	status := flags.String("status", "", "exact native plan status")
 	purpose := flags.String("purpose", "apply", "handoff use: apply or transport")
@@ -57,6 +68,10 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 	}
 	if flags.NArg() != 0 || *format != "json" {
 		return errors.New("runs accepts flags only and JSON output")
+	}
+	directNativePlan, err := contextRecordPlanInputMode(action, inputs, name, relative, planCommand, reviewPath, reviewSHA256)
+	if err != nil {
+		return err
 	}
 	if (action == "finalize" || action == "qualify-prepared") && *workflowSHA == "" && os.Getenv("GITHUB_ACTIONS") == "true" {
 		*workflowSHA = os.Getenv("GITHUB_WORKFLOW_SHA")
@@ -128,9 +143,38 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 		case "context-start", "context-observe", "context-observe-source":
 			inputName = "context"
 		case "context-record-plan":
-			inputName = "plan"
+			if !directNativePlan {
+				inputName = "plan"
+			}
 		}
-		if inputName != "" {
+		if action == "context-record-plan" && directNativePlan {
+			value, inputErr := r.recoveryDocument(checkout, inputs, "native-plan")
+			if inputErr != nil {
+				return inputErr
+			}
+			planObject, ok := value.(contract.Object)
+			if !ok {
+				return errors.New("context native plan input must be a raw JSON object")
+			}
+			plan, parseErr := contract.ParsePlan(planObject)
+			if parseErr != nil {
+				return errors.New("context native plan input is not a valid canonical reviewed plan: " + parseErr.Error())
+			}
+			if plan.Repository != repository {
+				return errors.New("context native plan belongs to another repository")
+			}
+			if plan.Command != planCommand.value {
+				return errors.New("context native plan command differs from --plan-command")
+			}
+			input = contract.Object{
+				"relative": relative.value, "name": name.value, "command": plan.Command,
+				"repository": repository.FullName(), "plan": plan.Object(),
+			}
+			if reviewPath.provided {
+				input["review_path"] = reviewPath.value
+				input["review_sha256"] = reviewSHA256.value
+			}
+		} else if inputName != "" {
 			value, inputErr := r.recoveryDocument(checkout, inputs, inputName)
 			if inputErr != nil {
 				return inputErr
@@ -178,11 +222,11 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 		case "context-phase":
 			data, err = engine.SetContextPhase(*packageRoot, *phase, *reason)
 		case "context-mark-plan":
-			data, err = engine.MarkContextPlan(*packageRoot, *name, *status)
+			data, err = engine.MarkContextPlan(*packageRoot, name.value, *status)
 		case "context-capture-journal":
-			data, err = engine.CaptureJournal(*packageRoot, *journalRoot, *name)
+			data, err = engine.CaptureJournal(*packageRoot, *journalRoot, name.value)
 		case "context-install-journal":
-			data, err = engine.InstallRestoredJournal(*packageRoot, *journalRoot, *name)
+			data, err = engine.InstallRestoredJournal(*packageRoot, *journalRoot, name.value)
 		}
 		if err != nil {
 			return err
@@ -207,6 +251,62 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 		}
 	}
 	return r.write(result)
+}
+
+type singleRecoveryValue struct {
+	flagName string
+	value    string
+	provided bool
+}
+
+func (v *singleRecoveryValue) String() string { return v.value }
+
+func (v *singleRecoveryValue) Set(value string) error {
+	if v.provided {
+		return errors.New("--" + v.flagName + " may be specified only once")
+	}
+	v.value = value
+	v.provided = true
+	return nil
+}
+
+func contextRecordPlanInputMode(action string, inputs inputsFlag, name, relative, planCommand, reviewPath, reviewSHA256 singleRecoveryValue) (bool, error) {
+	hasNativePlan := false
+	for _, input := range inputs {
+		key, _, ok := strings.Cut(input, "=")
+		if ok && key == "native-plan" {
+			hasNativePlan = true
+		}
+	}
+	metadataProvided := relative.provided || planCommand.provided || reviewPath.provided || reviewSHA256.provided
+
+	if action != "context-record-plan" {
+		if hasNativePlan || metadataProvided {
+			return false, errors.New("direct native plan inputs are supported only by runs context-record-plan")
+		}
+		return false, nil
+	}
+	if !hasNativePlan {
+		if metadataProvided || name.provided {
+			return false, errors.New("direct context plan metadata requires exactly one --input native-plan=FILE")
+		}
+		return false, nil
+	}
+	if len(inputs) != 1 {
+		return false, errors.New("direct context plan registration requires exactly one --input native-plan=FILE")
+	}
+	parts := strings.SplitN(inputs[0], "=", 2)
+	if len(parts) != 2 || parts[0] != "native-plan" || parts[1] == "" || parts[1] == "-" {
+		return false, errors.New("direct context plan input must use native-plan=FILE")
+	}
+	if !name.provided || strings.TrimSpace(name.value) == "" || !relative.provided || strings.TrimSpace(relative.value) == "" ||
+		!planCommand.provided || strings.TrimSpace(planCommand.value) == "" {
+		return false, errors.New("direct context plan registration requires --name, --relative and --plan-command")
+	}
+	if reviewPath.provided != reviewSHA256.provided || (reviewPath.provided && (strings.TrimSpace(reviewPath.value) == "" || strings.TrimSpace(reviewSHA256.value) == "")) {
+		return false, errors.New("--review-path and --review-sha256 must be supplied together")
+	}
+	return true, nil
 }
 
 var actionsWorkflowSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)

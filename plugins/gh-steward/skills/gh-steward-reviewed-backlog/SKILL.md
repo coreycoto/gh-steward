@@ -22,6 +22,15 @@ The consumer-owned policy identifies the repository and Project, issue-type titl
 3. For a rebalance, obtain the user's authored decision input and explicit queue policy. Do not infer the Now/Next/Later assignment, Project option mappings, rank step, linked-pull-request policy, or archive eligibility. Use `gh steward backlog prepare` with the named `payload`, the queue `policy`, explicit `options` containing `queue_mode` and positive integer `rank_step`, and the intended Project owner/type/number. `status_values` is needed only when a generated write changes status; it maps canonical `Todo` or `Done` to an actual Project option. Optional `linked_pr_policy` must define `marker_prefix` and `pr_number_pattern`; archive decisions then require captured live linked-PR evidence. A prior audit may be supplied as `backlog_audit`, but does not replace live source validation.
 4. Inspect the entire prepared plan: repository and Project identity, live and complete source evidence, every operation and its before/after values, archive prerequisites, and the exact `sha256`. Confirm the proposed changes match the user's intent. The generated plan is not self-approval.
 
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+For rebalancing, use the selected Project owner and number; `--project-owner-type`
+must be `User` or `Organization` as appropriate:
+
+```sh
+gh steward backlog prepare --repo-root . --repo "$REPOSITORY_URL" --project-owner OWNER --project-owner-type OWNER_TYPE --project-number NUMBER --policy queue-policy.json --input payload=authored-backlog.json --input options=rebalance-options.json --out backlog-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=backlog-prepare.json --outer-command rebalance-prepare --plan-command rebalance-apply --out backlog-plan.json
+```
+
 ## Apply
 
 For a mixed issue change set, use `backlog-mutations prepare --input payload=authored-issues.json --input projects=selected-projects.json`. The authored payload contains exactly `schema_version: 1` and a nonempty `issues` array. Each entry identifies an existing issue with `issue_number` or a new issue with `client_id`. New issues require `title` and `body`; existing issues need an explicit change. Optional fields are `title`, `body`, `labels`, nullable milestone title, `project`, `relationships`, and boolean `allow_duplicate_title`.
@@ -30,11 +39,18 @@ The Project input contains exactly `projects`, an array of selected identities w
 
 The optional `relationships` object sets nullable `parent` and/or the complete desired `blocked_by` list. References identify existing issues with `issue_number` or earlier new entries with `client_id`. Inspect additions and removals separately. This path preserves the authored v1 intent inside a reviewed v2 live plan; it does not apply an unreviewed legacy payload.
 
+Prepare and extract its separate mixed-issue plan:
+
+```sh
+gh steward backlog-mutations prepare --repo-root . --repo "$REPOSITORY_URL" --input payload=authored-issues.json --input projects=selected-projects.json --out backlog-mutations-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=backlog-mutations-prepare.json --outer-command backlog-mutations-prepare --plan-command backlog-mutations-apply --out backlog-mutations-plan.json
+```
+
 Only after the user explicitly approves that exact plan, use the exact same file and hash:
 
 ```sh
-gh steward backlog apply --repo-root . --input plan=reviewed-plan.json --approve-plan-sha EXACT_SHA256
-gh steward backlog-mutations apply --repo-root . --input plan=reviewed-plan.json --approve-plan-sha EXACT_SHA256
+gh steward backlog apply --repo-root . --input plan=backlog-plan.json --approve-plan-sha EXACT_SHA256
+gh steward backlog-mutations apply --repo-root . --input plan=backlog-mutations-plan.json --approve-plan-sha EXACT_SHA256
 ```
 
 Do not add selectors or policy to apply; its scope must come from the reviewed plan. The `--approve-plan-sha` value is an artifact-integrity check, not authorization. If the user has not approved the exact proposal, stop after preparing and explaining the plan.

@@ -26,7 +26,7 @@ import (
 	"github.com/coreycoto/gh-steward/internal/workflow"
 )
 
-var Version = "0.2.0-dev"
+var Version = "0.2.1-dev"
 var SourceRevision = "unknown"
 var SourceDirty = "unknown"
 
@@ -51,6 +51,9 @@ func (r Runner) Run(ctx context.Context, args []string) error {
 	if args[0] == "help" || args[0] == "--help" {
 		_, err := fmt.Fprint(r.Out, help)
 		return err
+	}
+	if args[0] == "plan" {
+		return r.runPlan(args[1:])
 	}
 	if args[0] == "version" || args[0] == "--version" || args[0] == "--source-revision" {
 		if args[0] == "--source-revision" {
@@ -813,6 +816,10 @@ func writeFile(root, path string, value contract.Object) error {
 }
 
 const help = `gh steward version --json
+gh steward plan extract --repo-root PATH --repo HTTPS_URL --input envelope=FILE --outer-command COMMAND --plan-command COMMAND --out FILE
+  Extracts a canonical v2 plan from one complete CLI prepare envelope without provider access.
+gh steward plan validate --repo-root PATH --repo HTTPS_URL --input plan=FILE --plan-command COMMAND
+  Validates a canonical v2 plan offline without rewriting its input or accessing a provider.
 gh steward snapshot repo|project|issues|queue|backlog [--repo-root PATH] [--repo HTTPS_URL]
 gh steward snapshot execution --input selector=FILE --policy FILE
 gh steward snapshot projects --project-owner LOGIN --project-owner-type User|Organization

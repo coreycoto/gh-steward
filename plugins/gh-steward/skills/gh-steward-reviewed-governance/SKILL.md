@@ -37,8 +37,11 @@ A Project scope has exactly `host`, `owner`, `owner_type`, `number`, `id` and
 unrelated issue. Repository-local configuration formatting remains a consumer
 operation; it does not need a GitHub mutation plan.
 
+Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.
+
 ```sh
-gh steward governance prepare --input payload=governance-request.json --out reviewed-plan.json
+gh steward governance prepare --repo-root . --repo "$REPOSITORY_URL" --input payload=governance-request.json --out governance-prepare.json
+gh steward plan extract --repo-root . --repo "$REPOSITORY_URL" --input envelope=governance-prepare.json --outer-command governance-prepare --plan-command governance-apply --out reviewed-plan.json
 ```
 
 Inspect the exact repository, complete source inventory, before-state, closed
