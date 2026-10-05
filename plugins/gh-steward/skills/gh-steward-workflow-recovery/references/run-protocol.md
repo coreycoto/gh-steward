@@ -38,6 +38,10 @@ Use a stable whole-workflow concurrency group with `cancel-in-progress: false` a
 
 Current no-op approval uses `kind: local-noop`, `workflow_source_sha256` (the raw trusted workflow file hash), and `mutators`, an exhaustive array of exact job display names and mutation-capable step names. Native plan entries may independently declare `prepared_recovery` with `workflow_source_sha256` and an exhaustive `mutators` inventory for that plan. Every pending plan being qualified must resolve to the same raw workflow digest. When changing a source, retain the prior hash and exact inventory in optional `previous_sources`, an array of objects with exactly `workflow_source_sha256` and `mutators`. Prior entries validate retained positive evidence only; they cannot qualify a new invocation under old source or classify legacy attempts. No-op evidence and prepared native plan evidence use separate policy entries and separate finalization paths.
 
+## Optional unknown-history boundary
+
+CLI 0.4.0 supports a separately reviewed, preview-only `history_cutover` in chain schema 6. It preserves a complete legacy inventory with unknown outcomes outside the native settlement list. It never substitutes an age cutoff for evidence or imports a fabricated native result. Default schema-4/5 recovery remains strict. Read [history-cutover.md](history-cutover.md) for capture, independent review, revocation, scope and immutable-prefix contracts. Native current-run no-op evidence still follows the rules below.
+
 ## Current no-op evidence
 
 Create a prepared empty-dispatch context only after the workflow chooses a plan-free outcome. Keep `settlement-chain.json`, `recovery-observation.json`, `events/trigger-event.json`, and `decisions/workflow-noop.json`. The decision has these exact identity fields, plus only its decision-specific `proposal` or `previews` evidence:

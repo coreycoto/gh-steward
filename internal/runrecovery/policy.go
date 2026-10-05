@@ -2,7 +2,10 @@ package runrecovery
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -12,6 +15,7 @@ import (
 
 var policyPlanName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 var workflowInputName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,80}$`)
+var historyCutoverLogin = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$`)
 
 type Engine struct {
 	repository contract.Repository
@@ -19,10 +23,12 @@ type Engine struct {
 }
 
 type workflowPolicy struct {
-	mutatorAlternatives [][]string
-	allowPublication    bool
-	plans               map[string]planPolicy
-	legacyImportReviews map[string]bool
+	mutatorAlternatives       [][]string
+	allowPublication          bool
+	plans                     map[string]planPolicy
+	legacyImportReviews       map[string]bool
+	historyCutoverReviews     map[string]bool
+	historyCutoverReviewIssue *Object
 }
 
 type planPolicy struct {
@@ -89,7 +95,7 @@ func NewEngine(policy Object, repository contract.Repository) (*Engine, error) {
 }
 
 func parseWorkflowPolicy(value any, workflow string) (workflowPolicy, error) {
-	raw, err := exactWithOptional(value, []string{"mutator_step_alternatives", "reviewed_source_shas", "allow_publication", "plans"}, []string{"legacy_import_reviews"}, "workflow policy")
+	raw, err := exactWithOptional(value, []string{"mutator_step_alternatives", "reviewed_source_shas", "allow_publication", "plans"}, []string{"legacy_import_reviews", "history_cutover_reviews", "history_cutover_review_issue"}, "workflow policy")
 	if err != nil {
 		return workflowPolicy{}, err
 	}
@@ -174,7 +180,107 @@ func parseWorkflowPolicy(value any, workflow string) (workflowPolicy, error) {
 			legacyReviews[digest] = true
 		}
 	}
-	return workflowPolicy{mutatorAlternatives: alternatives, allowPublication: allowPublication, plans: plans, legacyImportReviews: legacyReviews}, nil
+	historyCutoverReviews := map[string]bool{}
+	if value, exists := raw["history_cutover_reviews"]; exists {
+		rows, err := stringsArray(value, "exact history cutover reviews", false)
+		if err != nil || len(rows) > maxPendingAttempts {
+			return workflowPolicy{}, recoveryError("history cutover reviews must be a bounded exact digest inventory")
+		}
+		for _, digest := range rows {
+			if !IsSHA256(digest) || historyCutoverReviews[digest] {
+				return workflowPolicy{}, recoveryError("history cutover review digests are invalid or repeated")
+			}
+			historyCutoverReviews[digest] = true
+		}
+	}
+	var historyCutoverReviewIssue *Object
+	if value, exists := raw["history_cutover_review_issue"]; exists {
+		issue, err := Exact(value, []string{"number", "trusted_logins"}, "history cutover review issue")
+		if err != nil {
+			return workflowPolicy{}, err
+		}
+		number, err := positiveInteger(issue["number"], "history cutover review issue number")
+		logins, loginErr := stringsArray(issue["trusted_logins"], "history cutover trusted logins", true)
+		if err != nil || loginErr != nil || len(logins) > 128 {
+			return workflowPolicy{}, recoveryError("history cutover review issue requires a positive issue number and bounded trusted login list")
+		}
+		seen := map[string]bool{}
+		for _, login := range logins {
+			if !historyCutoverLogin.MatchString(login) || seen[login] {
+				return workflowPolicy{}, recoveryError("history cutover trusted logins must be unique canonical GitHub logins")
+			}
+			seen[login] = true
+		}
+		copyIssue := Object{"number": number, "trusted_logins": logins}
+		historyCutoverReviewIssue = &copyIssue
+	}
+	if len(historyCutoverReviews) > 0 && historyCutoverReviewIssue != nil {
+		return workflowPolicy{}, recoveryError("workflow policy cannot combine static and issue-based history cutover review channels")
+	}
+	return workflowPolicy{mutatorAlternatives: alternatives, allowPublication: allowPublication, plans: plans, legacyImportReviews: legacyReviews, historyCutoverReviews: historyCutoverReviews, historyCutoverReviewIssue: historyCutoverReviewIssue}, nil
+}
+
+// ValidateReviewedHistoryCutover checks the explicitly listed baseline digest
+// and exact target. The allowlist records which artifact was reviewed; it is
+// neither human approval nor permission to perform provider mutations.
+func (e *Engine) ValidateReviewedHistoryCutover(value any, targetValue any) (Object, error) {
+	baseline, err := ValidateHistoryCutover(value)
+	if err != nil {
+		return nil, err
+	}
+	target, err := e.validateTarget(targetValue)
+	if err != nil {
+		return nil, err
+	}
+	if !Equal(baseline["target"], target) {
+		return nil, recoveryError("history cutover baseline is for another repository or workflow target")
+	}
+	policy, err := e.workflowPolicy(fmt.Sprint(target["workflow_file"]))
+	if err != nil {
+		return nil, err
+	}
+	if !policy.historyCutoverReviews[fmt.Sprint(baseline["sha256"])] {
+		return nil, recoveryError("history cutover digest is not explicitly listed in trusted workflow policy")
+	}
+	return baseline, nil
+}
+
+// HistoryCutoverReviewIssues returns the configured issue used as an
+// independent review channel, keyed by workflow filename. The returned
+// entries are copies and do not prove that a qualifying comment exists.
+func (e *Engine) HistoryCutoverReviewIssues() map[string]Object {
+	result := map[string]Object{}
+	for workflow, policy := range e.workflows {
+		if policy.historyCutoverReviewIssue == nil {
+			continue
+		}
+		copyValue, err := cloneObject(*policy.historyCutoverReviewIssue)
+		if err == nil {
+			result[workflow] = copyValue
+		}
+	}
+	return result
+}
+
+// AdmitHistoryCutoverReview registers one exact digest in this Engine's
+// in-memory review allowlist after the caller has verified the complete
+// issue-comment inventory, exact statement and live author permission. It
+// verifies that the workflow has an independent review route configured; it
+// does not establish human approval by itself.
+func (e *Engine) AdmitHistoryCutoverReview(workflow, digest string) error {
+	if !IsSHA256(digest) {
+		return recoveryError("history cutover review requires an exact baseline digest")
+	}
+	policy, err := e.workflowPolicy(workflow)
+	if err != nil {
+		return err
+	}
+	if policy.historyCutoverReviewIssue == nil {
+		return recoveryError("workflow policy has no independent history cutover review issue")
+	}
+	policy.historyCutoverReviews[digest] = true
+	e.workflows[workflow] = policy
+	return nil
 }
 
 func parsePlanPolicy(value any, workflow, name string) (planPolicy, error) {
@@ -489,7 +595,69 @@ type policyReader struct {
 }
 
 func (e *Engine) ValidateRecoveryPlan(context, entry, plan Object, root string) error {
+	workflow := ""
+	if context != nil {
+		workflow = fmt.Sprint(context["workflow_file"])
+	}
+	cutover, err := e.previewOnlyCutoverAtRoot(root, workflow)
+	if err != nil {
+		return err
+	}
+	if cutover {
+		if entry == nil || plan == nil || context == nil {
+			return recoveryError("preview-only workflow-noop qualification requires exact context, plan and entry")
+		}
+		parsed, err := contract.ParsePlan(plan)
+		if err != nil || entry["name"] != "workflow-noop" || entry["command"] != "workflow-noop" || parsed.Command != "workflow-noop" || len(parsed.Operations) != 0 || context["publication"] != nil {
+			return recoveryError("reviewed history cutover permits only the exact zero-operation workflow-noop plan")
+		}
+	}
 	return e.validateRecoveryPlanWithReader(context, entry, plan, &policyReader{root: root, used: map[string]bool{}})
+}
+
+func (e *Engine) previewOnlyCutoverAtRoot(root, workflow string) (bool, error) {
+	if root == "" {
+		return false, nil
+	}
+	path := filepath.Join(root, "settlement-chain.json")
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > MaxCheckpointBytes {
+		return false, recoveryError("settlement chain is unsafe or unreadable while checking preview-only mode")
+	}
+	value, err := LoadJSON(path)
+	if err != nil {
+		return false, err
+	}
+	chain, err := object(value, "settlement chain")
+	if err != nil {
+		return false, err
+	}
+	if !exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
+		return false, nil
+	}
+	chain, err = Exact(chain, cutoverChainFields, "schema-6 settlement chain")
+	if err != nil {
+		return false, err
+	}
+	target, err := e.validateTarget(chain["target"])
+	if err != nil || target["workflow_file"] != workflow {
+		return false, recoveryError("schema-6 settlement chain belongs to another workflow")
+	}
+	if _, err := e.ValidateReviewedHistoryCutover(chain["history_cutover"], target); err != nil {
+		return false, err
+	}
+	unsigned := Object{}
+	for _, field := range cutoverChainFields[:len(cutoverChainFields)-1] {
+		unsigned[field] = chain[field]
+	}
+	canonical, err := Canonical(unsigned)
+	if err != nil || !IsSHA256(chain["sha256"]) || SHA256(canonical) != chain["sha256"] {
+		return false, recoveryError("schema-6 settlement chain digest is invalid")
+	}
+	return true, nil
 }
 
 // ValidateRecoveryPlanFiles revalidates a retained plan using only its exact sidecar file proofs.

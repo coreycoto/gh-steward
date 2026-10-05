@@ -21,6 +21,30 @@ func (e *Engine) recoveryHold(root, artifactName, reason string, invocation Invo
 	return Object{"outcome": "recovery_needed", "reason": reason, "artifact_name": artifactName}, nil
 }
 
+// HoldRecovery records a bounded local hold when the review boundary itself
+// could not be read. The persisted reason is intentionally generic so provider
+// error bodies or credentials cannot enter the recovery package.
+func (e *Engine) HoldRecovery(invocation Invocation, reason string) (Object, error) {
+	if invocation.RunID < 1 || invocation.Attempt < 1 || !workflowFilename.MatchString(invocation.Workflow) ||
+		!nonemptyString(invocation.RunName) || len(invocation.RunName) > 256 || strings.ContainsAny(invocation.RunName, "\r\n\x00") ||
+		!nonemptyString(invocation.RecoveryKey) || len(invocation.RecoveryKey) > 256 || strings.ContainsAny(invocation.RecoveryKey, "\r\n\x00") {
+		return nil, errors.New("recovery hold requires a valid exact workflow, run, attempt, title and semantic key")
+	}
+	if _, err := e.MutatorStepAlternatives(invocation.Workflow); err != nil {
+		return nil, err
+	}
+	root, err := runnerDirectory(invocation.PackageRoot, invocation.RunnerTemp, true, true)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(reason, "history cutover review could not be verified") {
+		reason = "required recovery review evidence could not be verified"
+	} else {
+		reason = "history cutover review could not be verified"
+	}
+	return e.recoveryHold(root, "", reason, invocation)
+}
+
 // Each historical archive is extracted in its own bounded lifetime. A long
 // sequence of terminal predecessors cannot retain every expanded package.
 func (e *Engine) inspectHistoricalPackage(ctx context.Context, reader ActionsReader, invocation Invocation, runs []Object, run, target, artifact Object, attempt int64, payload []byte, preparedFrontierOpen bool) (Object, error) {
@@ -99,7 +123,11 @@ func checkpointCandidates(ctx context.Context, reader ActionsReader, e *Engine, 
 	if err != nil {
 		return nil, err
 	}
-	pending, err := PendingAttempts(empty, observed, attempts, currentID, currentAttempt)
+	return checkpointCandidatesFromChain(ctx, reader, e, target, observed, attempts, all, currentID, currentAttempt, empty)
+}
+
+func checkpointCandidatesFromChain(ctx context.Context, reader ActionsReader, e *Engine, target Object, observed []Object, attempts map[int64]int64, all []Object, currentID, currentAttempt int64, base Object) ([]Object, error) {
+	pending, err := PendingAttempts(base, observed, attempts, currentID, currentAttempt)
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +214,28 @@ func checkpointCandidates(ctx context.Context, reader ActionsReader, e *Engine, 
 		candidates = append(candidates, chain)
 	}
 	return candidates, nil
+}
+
+func nativeSettlementCoversAttempt(chain Object, runID, attempt int64) bool {
+	inventory, err := array(chain["inventory"], "checkpoint inventory")
+	if err != nil {
+		return false
+	}
+	for _, raw := range inventory {
+		item, err := object(raw, "checkpoint inventory entry")
+		if err != nil {
+			return false
+		}
+		run, err := object(item["run"], "checkpoint inventory run")
+		if err != nil {
+			return false
+		}
+		if exactInt(run["id"], runID) {
+			settled, err := positiveInteger(item["settled_attempt"], "checkpoint attempt frontier")
+			return err == nil && settled >= attempt
+		}
+	}
+	return false
 }
 
 func preparedFrontierKey(runID, attempt int64) string {
@@ -322,6 +372,16 @@ func (e *Engine) Recover(ctx context.Context, reader ActionsReader, invocation I
 	return e.recoverWithLegacyCheckpoint(ctx, reader, invocation, nil)
 }
 
+// RecoverWithHistoryCutover seeds schema 6 from one separately reviewed,
+// preview-only baseline. Existing native lineage always wins; this entrypoint
+// refuses to erase it or classify any quarantined attempt as settled.
+func (e *Engine) RecoverWithHistoryCutover(ctx context.Context, reader ActionsReader, invocation Invocation, baseline Object) (Object, error) {
+	if baseline == nil {
+		return nil, recoveryError("explicit history cutover requires a sealed baseline")
+	}
+	return e.recoverWithCheckpoints(ctx, reader, invocation, nil, baseline)
+}
+
 // RecoverWithLegacyCheckpoint admits an explicitly supplied reviewed v5 prefix.
 // It is compared with every hosted checkpoint; an imported prefix never makes
 // an uncovered suffix disappear or enables fallback around conflicting proof.
@@ -333,6 +393,13 @@ func (e *Engine) RecoverWithLegacyCheckpoint(ctx context.Context, reader Actions
 }
 
 func (e *Engine) recoverWithLegacyCheckpoint(ctx context.Context, reader ActionsReader, invocation Invocation, imported Object) (Object, error) {
+	return e.recoverWithCheckpoints(ctx, reader, invocation, imported, nil)
+}
+
+func (e *Engine) recoverWithCheckpoints(ctx context.Context, reader ActionsReader, invocation Invocation, imported, historyCutover Object) (Object, error) {
+	if imported != nil && historyCutover != nil {
+		return nil, recoveryError("legacy imports and history cutovers cannot be combined")
+	}
 	if !nonemptyString(invocation.RunName) || !nonemptyString(invocation.RecoveryKey) {
 		return nil, errors.New("current workflow run title and semantic recovery key are required")
 	}
@@ -351,7 +418,38 @@ func (e *Engine) recoverWithLegacyCheckpoint(ctx context.Context, reader Actions
 	if err != nil {
 		return hold(err)
 	}
-	candidates, err := checkpointCandidates(ctx, reader, e, target, observed, attempts, allArtifacts, invocation.RunID, invocation.Attempt)
+	var reviewedCutover Object
+	if historyCutover != nil {
+		reviewedCutover, err = e.ValidateReviewedHistoryCutover(historyCutover, target)
+		if err != nil {
+			return hold(err)
+		}
+		if err := validateHistoryCutoverNativeArtifacts(target, reviewedCutover, observed, attempts, allArtifacts); err != nil {
+			return hold(err)
+		}
+		highwaters, err := validateHistoryCutoverPrefix(reviewedCutover, observed, attempts)
+		if err != nil {
+			return hold(err)
+		}
+		if highwater := highwaters[invocation.RunID]; invocation.Attempt <= highwater {
+			return hold(recoveryError("current invocation is one of the unknown attempts quarantined by the reviewed history cutover"))
+		}
+	}
+	var cutoverSeed Object
+	if reviewedCutover != nil {
+		cutoverSeed, err = HistoryCutoverChain(target, reviewedCutover)
+		if err != nil {
+			return hold(err)
+		}
+	}
+	base := cutoverSeed
+	if base == nil {
+		base, err = EmptyChain(target)
+		if err != nil {
+			return hold(err)
+		}
+	}
+	candidates, err := checkpointCandidatesFromChain(ctx, reader, e, target, observed, attempts, allArtifacts, invocation.RunID, invocation.Attempt, base)
 	if err != nil {
 		return hold(err)
 	}
@@ -365,6 +463,9 @@ func (e *Engine) recoverWithLegacyCheckpoint(ctx context.Context, reader Actions
 		}
 		candidates = append(candidates, checked)
 	}
+	if reviewedCutover != nil {
+		candidates = append(candidates, cutoverSeed)
+	}
 	chain, err := e.SelectCheckpoint(candidates, target, observed, attempts)
 	if err != nil {
 		return hold(err)
@@ -373,6 +474,19 @@ func (e *Engine) recoverWithLegacyCheckpoint(ctx context.Context, reader Actions
 		chain, err = EmptyChain(target)
 		if err != nil {
 			return hold(err)
+		}
+	}
+	if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
+		baseline, err := e.ValidateReviewedHistoryCutover(chain["history_cutover"], target)
+		if err != nil {
+			return hold(err)
+		}
+		highwaters, err := validateHistoryCutoverPrefix(baseline, observed, attempts)
+		if err != nil {
+			return hold(err)
+		}
+		if highwater := highwaters[invocation.RunID]; invocation.Attempt <= highwater {
+			return hold(recoveryError("current invocation is one of the unknown attempts quarantined by the reviewed history cutover"))
 		}
 	}
 	scratch, err := os.MkdirTemp(filepath.Dir(root), "gh-steward-history-")
@@ -394,6 +508,9 @@ func (e *Engine) recoverWithLegacyCheckpoint(ctx context.Context, reader Actions
 			return hold(err)
 		}
 		if len(pending) == 0 {
+			if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) && invocation.Attempt > 1 && !nativeSettlementCoversAttempt(chain, invocation.RunID, invocation.Attempt-1) {
+				return hold(recoveryError("the preceding attempt is quarantined by the history cutover and has no native settlement"))
+			}
 			if err := persistPackageJSON(root, "settlement-chain.json", chain); err != nil {
 				return nil, err
 			}
@@ -408,7 +525,14 @@ func (e *Engine) recoverWithLegacyCheckpoint(ctx context.Context, reader Actions
 				// An already settled rerun must never prepare another target. Its
 				// positive predecessor checkpoint is retained without manufacturing
 				// a second provider acknowledgement or a no-dispatch assertion.
-				return Object{"outcome": "terminal", "reason": "the rerun predecessor is already positively settled; fresh work is prohibited", "artifact_name": artifactName}, nil
+				reason := "the rerun predecessor is already positively settled; fresh work is prohibited"
+				if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
+					reason = "the native rerun predecessor is positively settled; fresh work is prohibited"
+				}
+				return Object{"outcome": "terminal", "reason": reason, "artifact_name": artifactName}, nil
+			}
+			if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
+				return Object{"outcome": "fresh", "mode": historyCutoverScope, "reason": "pre-cutover attempts remain unknown and quarantined; no new unsettled attempt was found", "artifact_name": artifactName}, nil
 			}
 			return Object{"outcome": "fresh", "reason": "all prior exact workflow attempts are positively settled", "artifact_name": artifactName}, nil
 		}
@@ -490,6 +614,9 @@ func (e *Engine) recoverWithLegacyCheckpoint(ctx context.Context, reader Actions
 		inspected, err := e.inspectHistoricalPackage(ctx, reader, invocation, runs, run, target, artifact, attempt, payload, len(frontier) > 0)
 		if err != nil {
 			return hold(err)
+		}
+		if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) && inspected["kind"] != "terminal" {
+			return hold(recoveryError("preview-only history cutover cannot restore or retain nonterminal %s source proof", fmt.Sprint(inspected["kind"])))
 		}
 		if inspected["kind"] == "prepared-terminal" {
 			chain, err = appendPreparedTerminal(chain, target, observed, attempts, inspected["record"].(Object), invocation.RunID, invocation.Attempt, e)

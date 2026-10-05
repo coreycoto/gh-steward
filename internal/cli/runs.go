@@ -23,6 +23,9 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 		return errors.New("runs requires an action")
 	}
 	action := args[0]
+	if action == "cutover-preview" || action == "cutover-validate" {
+		return r.runHistoryCutover(ctx, args)
+	}
 	if action == "legacy-review" || action == "legacy-import-preview" || action == "import-legacy" {
 		return r.runLegacyRecovery(ctx, args)
 	}
@@ -197,22 +200,55 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 				}
 			}
 		} else if action == "recover" && len(inputs) != 0 {
-			value, inputErr := r.recoveryDocument(checkout, inputs, "legacy-checkpoint")
+			inputName = "legacy-checkpoint"
+			if len(inputs) == 1 && strings.HasPrefix(inputs[0], "history-cutover=") {
+				inputName = "history-cutover"
+			}
+			value, inputErr := r.recoveryDocument(checkout, inputs, inputName)
 			if inputErr != nil {
 				return inputErr
 			}
 			var ok bool
 			input, ok = value.(contract.Object)
 			if !ok {
-				return errors.New("legacy checkpoint must be a raw settlement chain object")
+				return errors.New("recovery input must be a raw JSON object")
+			}
+			if inputName == "history-cutover" {
+				input, inputErr = unwrapHistoryCutover(input, repository)
+				if inputErr != nil {
+					return inputErr
+				}
 			}
 		} else if len(inputs) != 0 {
 			return errors.New("this runs action does not accept named inputs")
 		}
+		// A review outside source commits avoids generating another legacy run
+		// merely by pinning a reviewed boundary. Reads still use the trusted
+		// checkout policy and the native selected-repository transport.
+		var cutoverReviewError error
+		if engine.HistoryCutoverReviewIssues()[*workflow] != nil && !strings.HasPrefix(action, "context-") {
+			if reader == nil {
+				transport, transportErr := native.New(checkout, repository)
+				if transportErr != nil {
+					return transportErr
+				}
+				reader = runrecovery.NativeActionsReader{Transport: transport}
+			}
+			if err := resolveHistoryCutoverReviews(ctx, reader, engine, repository, *workflow); err != nil {
+				if action != "recover" {
+					return err
+				}
+				cutoverReviewError = err
+			}
+		}
 		switch action {
 		case "recover":
-			if input == nil {
+			if cutoverReviewError != nil {
+				data, err = engine.HoldRecovery(invocation, "history cutover review could not be verified: "+cutoverReviewError.Error())
+			} else if input == nil {
 				data, err = engine.Recover(ctx, reader, invocation)
+			} else if inputName == "history-cutover" {
+				data, err = engine.RecoverWithHistoryCutover(ctx, reader, invocation, input)
 			} else {
 				data, err = engine.RecoverWithLegacyCheckpoint(ctx, reader, invocation, input)
 			}

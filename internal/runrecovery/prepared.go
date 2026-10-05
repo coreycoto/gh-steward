@@ -49,6 +49,13 @@ func (e *Engine) QualifyPrepared(ctx context.Context, reader ActionsReader, opti
 	if err != nil {
 		return nil, err
 	}
+	cutover, err := e.previewOnlyCutoverAtRoot(root, options.Workflow)
+	if err != nil {
+		return nil, err
+	}
+	if cutover {
+		return nil, errors.New("preview-only history cutover cannot qualify executable plans for recovery")
+	}
 	if err := e.validateRunContext(contextValue); err != nil {
 		return nil, err
 	}

@@ -70,6 +70,10 @@ func (e *Engine) AcquireHandoffFor(ctx context.Context, reader ActionsReader, in
 	if err != nil {
 		return nil, err
 	}
+	cutoverChain := exactInt(validatedChain["schema_version"], historyCutoverSettlementSchemaVersion)
+	if cutoverChain && purpose == "apply" {
+		return nil, recoveryError("preview-only history cutover cannot authorize an apply handoff")
+	}
 	pending, err := PendingAttempts(validatedChain, observed, attempts, invocation.RunID, invocation.Attempt)
 	if err != nil {
 		return nil, err
@@ -85,6 +89,30 @@ func (e *Engine) AcquireHandoffFor(ctx context.Context, reader ActionsReader, in
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
+	}
+	if cutoverChain {
+		if purpose != "transport" || runContext == nil || runContext["phase"] != "completed" || runContext["publication"] != nil {
+			return nil, recoveryError("preview-only history cutover permits only inert workflow-noop transport")
+		}
+		entries, err := array(runContext["plans"], "history cutover transport plans")
+		if err != nil || len(entries) != 1 {
+			return nil, recoveryError("history cutover transport contains hidden or executable plans")
+		}
+		entry, err := exactWithOptional(entries[0], runContextPlanRequiredFields, runContextPlanOptionalFields, "history cutover transport plan")
+		if err != nil || entry["name"] != "workflow-noop" || entry["command"] != "workflow-noop" || entry["status"] != "completed" {
+			return nil, recoveryError("history cutover transport is not an exact completed workflow-noop")
+		}
+		plan, err := e.loadContextPlan(root, runContext, entry)
+		if err != nil {
+			return nil, err
+		}
+		if err := e.ValidateRecoveryPlan(runContext, entry, plan, root); err != nil {
+			return nil, err
+		}
+		files, err := os.ReadDir(filepath.Join(root, "plans"))
+		if err != nil || len(files) != 1 || files[0].Name() != "workflow-noop.json" || !files[0].Type().IsRegular() {
+			return nil, recoveryError("history cutover transport contains unreferenced plan files")
+		}
 	}
 	if len(pending) > 0 {
 		if len(pending) != 1 || runContext == nil {

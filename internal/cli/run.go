@@ -26,7 +26,7 @@ import (
 	"github.com/coreycoto/gh-steward/internal/workflow"
 )
 
-var Version = "0.3.0-dev"
+var Version = "0.4.0-dev"
 var SourceRevision = "unknown"
 var SourceDirty = "unknown"
 
@@ -865,7 +865,15 @@ gh steward runs import-legacy --input import=FILE --store PRIVATE_DIRECTORY --ap
   it never dispatches a provider write or fabricates a native completion receipt.
   Legacy commands print summaries. Use --out CHECKOUT_RELATIVE_FILE to retain
   the complete result privately; stdout never includes raw historical proofs.
-gh steward runs recover --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH [--input legacy-checkpoint=FILE]
+gh steward runs cutover-preview --workflow FILE --out PRIVATE_FILE [--policy FILE] [--state-read SAME_REPO_ENDPOINT]
+gh steward runs cutover-validate --input baseline=FILE [--out PRIVATE_FILE]
+  Cutover preview reads complete terminal Actions history and quarantines old
+  attempts as unknown. It does not activate a baseline, import old outcomes,
+  or grant mutation authority. Validation is provider-free shape/digest checking.
+  A cutover requires an exact trusted policy digest or configured review issue
+  with a current trusted maintainer's exact approval. All future attempts remain
+  subject to strict native proof; schema-6 cutovers are preview-only.
+gh steward runs recover --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH [--input legacy-checkpoint=FILE | --input history-cutover=FILE]
 gh steward runs qualify-prepared --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA
 gh steward runs acquire-handoff --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --artifact-id ID --artifact-digest sha256:DIGEST [--purpose apply|transport]
 gh steward runs verify-publication --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA
