@@ -107,6 +107,17 @@ func (f *branchTestProvider) DeleteBranch(_ context.Context, nonce, branch, sha,
 	if !found {
 		return nil, errors.New("duplicate or foreign fixture deletion")
 	}
+	if evidence, ok := f.inventory["branch_evidence"].(contract.Object); ok {
+		collection, _ := contract.ObjectAt(evidence, "inventory")
+		refs, _ := contract.Objects(collection, "branches")
+		remaining := []any{}
+		for _, ref := range refs {
+			if ref["name"] != branch {
+				remaining = append(remaining, ref)
+			}
+		}
+		collection["branches"] = remaining
+	}
 	f.writes++
 	if err := f.save(); err != nil {
 		return nil, err
@@ -261,45 +272,51 @@ func TestBranchCleanupFreshProcessHelper(t *testing.T) {
 }
 
 func TestBranchCleanupFreshProcessNeverReplaysUnknownOrCompletedWrites(t *testing.T) {
-	for _, mode := range []string{"before-ack", "after-ack"} {
-		t.Run(mode, func(t *testing.T) {
-			root := t.TempDir()
-			f := &branchTestProvider{inventory: branchTestInventory(2), path: filepath.Join(root, "provider.json")}
-			if err := f.save(); err != nil {
-				t.Fatal(err)
-			}
-			plan := branchTestPlan(t, f, 2)
-			bytes, err := contract.Canonical(plan.Object())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(root, "plan.json"), bytes, 0600); err != nil {
-				t.Fatal(err)
-			}
-			child := exec.Command(os.Args[0], "-test.run=^TestBranchCleanupFreshProcessHelper$")
-			child.Env = append(os.Environ(), "STEWARD_BRANCH_TEST_ROOT="+root, "STEWARD_BRANCH_TEST_CRASH="+mode)
-			out, err := child.CombinedOutput()
-			var exit *exec.ExitError
-			wantCode := 81
-			if mode == "after-ack" {
-				wantCode = 82
-			}
-			if !errors.As(err, &exit) || exit.ExitCode() != wantCode {
-				t.Fatalf("child did not stop at native boundary: %v %s", err, out)
-			}
-			fresh := &branchTestProvider{path: f.path}
-			result, err := branchTestEngine(root, fresh).Apply(context.Background(), plan.Object())
-			if loadErr := fresh.load(); loadErr != nil {
-				t.Fatal(loadErr)
-			}
-			if mode == "before-ack" {
-				if err == nil || fresh.writes != 1 {
-					t.Fatal("unknown deletion replayed", result, err, fresh.writes)
+	for _, shape := range []string{"present_only", "mixed"} {
+		for _, mode := range []string{"before-ack", "after-ack"} {
+			t.Run(shape+"/"+mode, func(t *testing.T) {
+				root := t.TempDir()
+				inventory, count := branchTestInventory(2), 2
+				if shape == "mixed" {
+					inventory, count = branchAbsenceInventory(3, true, 0), 3
 				}
-			} else if err != nil || result["status"] != "completed" || fresh.writes != 2 {
-				t.Fatal("durable deletion did not resume remaining operation once", result, err, fresh.writes)
-			}
-		})
+				f := &branchTestProvider{inventory: inventory, path: filepath.Join(root, "provider.json")}
+				if err := f.save(); err != nil {
+					t.Fatal(err)
+				}
+				plan := branchTestPlan(t, f, count)
+				bytes, err := contract.Canonical(plan.Object())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "plan.json"), bytes, 0600); err != nil {
+					t.Fatal(err)
+				}
+				child := exec.Command(os.Args[0], "-test.run=^TestBranchCleanupFreshProcessHelper$")
+				child.Env = append(os.Environ(), "STEWARD_BRANCH_TEST_ROOT="+root, "STEWARD_BRANCH_TEST_CRASH="+mode)
+				out, err := child.CombinedOutput()
+				var exit *exec.ExitError
+				wantCode := 81
+				if mode == "after-ack" {
+					wantCode = 82
+				}
+				if !errors.As(err, &exit) || exit.ExitCode() != wantCode {
+					t.Fatalf("child did not stop at native boundary: %v %s", err, out)
+				}
+				fresh := &branchTestProvider{path: f.path}
+				result, err := branchTestEngine(root, fresh).Apply(context.Background(), plan.Object())
+				if loadErr := fresh.load(); loadErr != nil {
+					t.Fatal(loadErr)
+				}
+				if mode == "before-ack" {
+					if err == nil || fresh.writes != 1 {
+						t.Fatal("unknown deletion replayed", result, err, fresh.writes)
+					}
+				} else if err != nil || result["status"] != "completed" || fresh.writes != 2 {
+					t.Fatal("durable deletion did not resume remaining operation once", result, err, fresh.writes)
+				}
+			})
+		}
 	}
 }
 

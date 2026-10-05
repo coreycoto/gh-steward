@@ -1448,6 +1448,7 @@ func (e *Engine) BuildRecoverySourceRecord(input Object) (Object, error) {
 	completedDispatches := 0
 	unfinishedDispatches := 0
 	unfinishedWithoutDispatch := 0
+	zeroOperationContinuation := false
 	reader := &policyReader{root: root, used: map[string]bool{}}
 	for index, raw := range rawPlans {
 		planInput, err := exactWithOptional(raw, []string{"name", "command", "plan_sha256", "journal_id", "plan_path", "journal_path"}, []string{"apply_result_path"}, "recovery-source plan input")
@@ -1490,6 +1491,7 @@ func (e *Engine) BuildRecoverySourceRecord(input Object) (Object, error) {
 		if err := e.validateRecoveryPlanWithReader(context, entry, rawPlan, reader); err != nil {
 			return nil, recoveryError("recovery-source policy evidence is invalid: %v", err)
 		}
+		zeroOperationContinuation = zeroOperationContinuation || e.completedMergeZeroOperationCleanup(context, entry, rawPlan)
 		var journalFile, applyResultFile Object
 		if planInput["journal_path"] != nil {
 			journalPath, err := requiredAbsolutePath(planInput["journal_path"], "recovery-source journal")
@@ -1533,20 +1535,24 @@ func (e *Engine) BuildRecoverySourceRecord(input Object) (Object, error) {
 					}
 				} else if dispatches > 0 {
 					unfinishedDispatches += dispatches
-				} else {
+				} else if !e.completedMergeZeroOperationCleanup(context, entry, rawPlan) {
 					return nil, recoveryError("unfinished source journal has no positive native dispatch receipt")
 				}
 			} else if !os.IsNotExist(err) {
 				return nil, recoveryError("recovery-source journal is unsafe or unreadable: %v", err)
-			} else if status != "prepared" {
+			} else if status != "prepared" && !e.completedMergeZeroOperationCleanup(context, entry, rawPlan) {
 				return nil, recoveryError("started recovery-source plan lost its durable journal")
 			} else {
-				unfinishedWithoutDispatch++
+				if status == "prepared" {
+					unfinishedWithoutDispatch++
+				}
 			}
-		} else if status != "prepared" {
+		} else if status != "prepared" && !e.completedMergeZeroOperationCleanup(context, entry, rawPlan) {
 			return nil, recoveryError("started recovery-source plan lacks its durable journal path")
 		} else {
-			unfinishedWithoutDispatch++
+			if status == "prepared" {
+				unfinishedWithoutDispatch++
+			}
 		}
 		proof := Object{
 			"name": name, "command": command, "plan_sha256": planDigest, "journal_id": journalID,
@@ -1558,10 +1564,12 @@ func (e *Engine) BuildRecoverySourceRecord(input Object) (Object, error) {
 		planProofs = append(planProofs, proof)
 	}
 	if unfinishedDispatches == 0 {
-		if completedDispatches > 0 {
-			return nil, recoveryError("completed parent receipts cannot qualify an unstarted continuation")
+		if !zeroOperationContinuation || completedDispatches == 0 || unfinishedWithoutDispatch != 0 {
+			if completedDispatches > 0 {
+				return nil, recoveryError("completed parent receipts cannot qualify an unstarted continuation")
+			}
+			return nil, recoveryError("recovery-source has no durable native dispatch identity; no-dispatch remains unqualified")
 		}
-		return nil, recoveryError("recovery-source has no durable native dispatch identity; no-dispatch remains unqualified")
 	}
 	if unfinishedWithoutDispatch != 0 {
 		return nil, recoveryError("recovery-source mixes journaled progress with an unstarted native plan")

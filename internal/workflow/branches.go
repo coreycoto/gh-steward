@@ -34,8 +34,15 @@ func PrepareBranchCleanup(ctx context.Context, provider BranchCleanupProvider, r
 	if err != nil {
 		return contract.Plan{}, err
 	}
-	sources := branchCleanupSources()
+	sources := branchCleanupInventorySources(inventory)
 	data := contract.Object{"selection": selection, "inventory": inventory}
+	absences, err := branchCleanupAbsences(inventory)
+	if err != nil {
+		return contract.Plan{}, err
+	}
+	if len(absences) > 0 {
+		data["already_absent"] = absences
+	}
 	plan := contract.Plan{Command: BranchCleanupCommand, Repository: repo, Data: data, Sources: sources}
 	ops, err := branchCleanupOperations(plan)
 	if err != nil {
@@ -50,8 +57,20 @@ func branchCleanupSources() contract.Object {
 		"base_dependents": contract.Object{"source": "github_api", "live": true, "complete": true}}
 }
 
+func branchCleanupInventorySources(inventory contract.Object) contract.Object {
+	sources := branchCleanupSources()
+	if _, present := inventory["branch_evidence"]; present {
+		sources["repository_settings"] = contract.Object{"source": "github_api", "live": true, "complete": true}
+	}
+	return sources
+}
+
 func normalizeBranchCleanupInventory(raw contract.Object, repo contract.Repository, selection contract.Object) (contract.Object, error) {
-	if !executionKeys(raw, "repo", "repository_node_id", "default_branch", "branches", "provenance") {
+	keys := []string{"repo", "repository_node_id", "default_branch", "branches", "provenance"}
+	if _, present := raw["branch_evidence"]; present {
+		keys = append(keys, "branch_evidence")
+	}
+	if !executionKeys(raw, keys...) {
 		return nil, errors.New("branch cleanup inventory has unsupported or missing facets")
 	}
 	rawRepo, err := contract.ObjectAt(raw, "repo")
@@ -72,6 +91,14 @@ func normalizeBranchCleanupInventory(raw contract.Object, repo contract.Reposito
 	}
 	if err := native.ValidateBranchName(defaultBranch); err != nil {
 		return nil, err
+	}
+	var evidence contract.Object
+	var refs map[string]string
+	if _, present := raw["branch_evidence"]; present {
+		evidence, refs, err = normalizeBranchCleanupEvidence(raw["branch_evidence"], repo, nodeID, defaultBranch)
+		if err != nil {
+			return nil, err
+		}
 	}
 	provenance, err := contract.ObjectAt(raw, "provenance")
 	if err != nil || !same(provenance, contract.Object{"live": true, "complete": true, "source": "github_api", "repository_node_id": nodeID, "selection": selection}) {
@@ -105,6 +132,12 @@ func normalizeBranchCleanupInventory(raw contract.Object, repo contract.Reposito
 			}
 			branch = ref
 		}
+		if evidence != nil {
+			sha, exists := refs[name]
+			if (branch != nil) != exists || (exists && branch.(contract.Object)["sha"] != sha) {
+				return nil, errors.New("cleanup ref differs from the complete branch inventory")
+			}
+		}
 		pr, err := contract.ObjectAt(row, "pull_request")
 		if err != nil {
 			return nil, err
@@ -129,7 +162,11 @@ func normalizeBranchCleanupInventory(raw contract.Object, repo contract.Reposito
 		}
 		canonical = append(canonical, contract.Object{"selection": requested[index], "branch": branch, "pull_request": normalized, "base_dependents": dependents})
 	}
-	return contract.Object{"repo": repo.Object(), "repository_node_id": nodeID, "default_branch": defaultBranch, "branches": canonical, "provenance": provenance}, nil
+	result := contract.Object{"repo": repo.Object(), "repository_node_id": nodeID, "default_branch": defaultBranch, "branches": canonical, "provenance": provenance}
+	if evidence != nil {
+		result["branch_evidence"] = evidence
+	}
+	return result, nil
 }
 
 func branchCleanupProviderPR(pr contract.Object) (contract.Object, error) {
@@ -216,7 +253,11 @@ func validateBranchBaseDependents(raw contract.Object, repo contract.Repository,
 }
 
 func branchCleanupPlan(p contract.Plan) (contract.Object, contract.Object, error) {
-	if p.Command != BranchCleanupCommand || !executionKeys(p.Data, "selection", "inventory") || !same(p.Sources, branchCleanupSources()) {
+	keys := []string{"selection", "inventory"}
+	if _, present := p.Data["already_absent"]; present {
+		keys = append(keys, "already_absent")
+	}
+	if p.Command != BranchCleanupCommand || !executionKeys(p.Data, keys...) {
 		return nil, nil, errors.New("branch cleanup adapter rejects this command or authored source scope")
 	}
 	rawSelection, err := contract.ObjectAt(p.Data, "selection")
@@ -235,6 +276,17 @@ func branchCleanupPlan(p contract.Plan) (contract.Object, contract.Object, error
 	if err != nil || !same(inventory, raw) {
 		return nil, nil, errors.New("stored branch cleanup inventory is incomplete or noncanonical")
 	}
+	if !same(p.Sources, branchCleanupInventorySources(inventory)) {
+		return nil, nil, errors.New("branch cleanup source scope differs from the reviewed inventory")
+	}
+	absences, err := branchCleanupAbsences(inventory)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, recorded := p.Data["already_absent"]
+	if (len(absences) > 0) != recorded || (recorded && !same(p.Data["already_absent"], absences)) {
+		return nil, nil, errors.New("branch cleanup no-op evidence differs from the exact reviewed absent candidates")
+	}
 	return selection, inventory, nil
 }
 
@@ -248,9 +300,8 @@ func branchCleanupOperations(p contract.Plan) ([]contract.Operation, error) {
 	for index, row := range rows {
 		selection, _ := contract.ObjectAt(row, "selection")
 		name := selection["name"].(string)
-		branch, err := contract.ObjectAt(row, "branch")
-		if err != nil || name == inventory["default_branch"] || branch["sha"] != selection["sha"] {
-			return nil, errors.New("cleanup requires a present exact reviewed non-default branch")
+		if name == inventory["default_branch"] {
+			return nil, errors.New("cleanup requires an exact reviewed non-default branch")
 		}
 		pr, _ := contract.ObjectAt(row, "pull_request")
 		headRepo, err := contract.ObjectAt(pr, "head_repository")
@@ -265,6 +316,15 @@ func branchCleanupOperations(p contract.Plan) ([]contract.Operation, error) {
 		prs, _ := contract.Objects(dependents, "pull_requests")
 		if len(prs) > 0 {
 			return nil, errors.New("branch cleanup candidate is still a base of an open PR")
+		}
+		// Positive reviewed absence is a zero-write outcome. It is not a
+		// deletion primitive or proof that an earlier uncertain write succeeded.
+		if row["branch"] == nil {
+			continue
+		}
+		branch, err := contract.ObjectAt(row, "branch")
+		if err != nil || branch["sha"] != selection["sha"] {
+			return nil, errors.New("cleanup requires the present exact reviewed branch SHA")
 		}
 		number, _ := contract.PositiveInteger(selection["pull_request_number"])
 		ops = append(ops, contract.Operation{ID: fmt.Sprintf("branch-cleanup-%06d", index+1), Kind: "branch-delete", Target: contract.Object{"name": name, "sha": selection["sha"], "pull_request_number": number, "repository_node_id": inventory["repository_node_id"], "ref_id": branch["id"]}, Before: contract.Object{"exists": true, "ref": branch}, After: contract.Object{"exists": false, "ref": nil}})
@@ -285,12 +345,34 @@ func branchCleanupPrefixInventory(p contract.Plan, last int) (contract.Object, e
 	if err != nil {
 		return nil, err
 	}
-	rows, _ := contract.Objects(projected, "branches")
-	if last >= len(rows) {
+	ops, err := branchCleanupOperations(p)
+	if err != nil {
+		return nil, err
+	}
+	if last >= len(ops) {
 		return nil, errors.New("branch cleanup projection exceeds reviewed candidates")
 	}
+	deleted := map[string]bool{}
 	for index := 0; index <= last; index++ {
-		rows[index]["branch"] = nil
+		deleted[ops[index].Target["name"].(string)] = true
+	}
+	rows, _ := contract.Objects(projected, "branches")
+	for _, row := range rows {
+		selection, _ := contract.ObjectAt(row, "selection")
+		if deleted[selection["name"].(string)] {
+			row["branch"] = nil
+		}
+	}
+	if evidence, present := projected["branch_evidence"].(contract.Object); present {
+		collection, _ := contract.ObjectAt(evidence, "inventory")
+		branches, _ := contract.Objects(collection, "branches")
+		remaining := []any{}
+		for _, branch := range branches {
+			if !deleted[branch["name"].(string)] {
+				remaining = append(remaining, branch)
+			}
+		}
+		collection["branches"] = remaining
 	}
 	return projected, nil
 }
@@ -389,7 +471,7 @@ func (b BranchCleanup) Preflight(ctx context.Context, p contract.Plan, receipts 
 	if err != nil {
 		return err
 	}
-	actual, err := normalizeBranchCleanupInventory(raw, p.Repository, selection)
+	actual, err := branchCleanupObservedInventory(raw, p, selection)
 	if err != nil {
 		return err
 	}
@@ -397,6 +479,21 @@ func (b BranchCleanup) Preflight(ctx context.Context, p contract.Plan, receipts 
 		return errors.New("complete live branch cleanup inventory drifted from reviewed state")
 	}
 	return nil
+}
+
+// New captures carry additive complete-collection/retention evidence. Validate
+// it before projecting a live read into an older present-only plan's schema;
+// historical receipt digests and exact deletion intents must remain unchanged.
+func branchCleanupObservedInventory(raw contract.Object, p contract.Plan, selection contract.Object) (contract.Object, error) {
+	actual, err := normalizeBranchCleanupInventory(raw, p.Repository, selection)
+	if err != nil {
+		return nil, err
+	}
+	reviewed, _ := contract.ObjectAt(p.Data, "inventory")
+	if _, extended := reviewed["branch_evidence"]; !extended {
+		delete(actual, "branch_evidence")
+	}
+	return actual, nil
 }
 
 func (b BranchCleanup) Dispatch(ctx context.Context, p contract.Plan, op contract.Operation, nonce string, receipts []contract.Object) (contract.Object, error) {
@@ -448,7 +545,7 @@ func (b BranchCleanup) observeAfter(ctx context.Context, p contract.Plan, op con
 	if err != nil {
 		return nil, err
 	}
-	actual, err := normalizeBranchCleanupInventory(raw, p.Repository, selection)
+	actual, err := branchCleanupObservedInventory(raw, p, selection)
 	if err != nil {
 		return nil, err
 	}

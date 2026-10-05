@@ -19,7 +19,7 @@ func (n NativeBranchCleanup) BranchCleanupInventory(ctx context.Context, rawSele
 	if err != nil {
 		return nil, err
 	}
-	repository, err := n.Transport.ReadRepository(ctx)
+	repository, err := n.Transport.ReadDeliveryRepository(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +78,10 @@ func (n NativeBranchCleanup) BranchCleanupInventory(ctx context.Context, rawSele
 		if err != nil {
 			return nil, err
 		}
+		headRepository, err := contract.ObjectAt(raw, "headRepository")
+		if err != nil || headRepository["id"] != repository["id"] {
+			return nil, errors.New("cleanup PR head repository incarnation is unavailable or changed")
+		}
 		pr, err := snapshot.NormalizeMergePullRequest(raw, n.Transport.Repository, number)
 		if err != nil {
 			return nil, err
@@ -96,16 +100,26 @@ func (n NativeBranchCleanup) BranchCleanupInventory(ctx context.Context, rawSele
 		candidate["base_dependents"] = dependents
 		candidates = append(candidates, candidate)
 	}
-	final, err := n.Transport.ReadRepository(ctx)
+	// Repeat the complete collection after the selected PR/dependency reads so
+	// branch-name reuse during capture cannot become an absence no-op.
+	finalBranches, err := n.Transport.BranchInventory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !same(branchInventory, finalBranches) {
+		return nil, errors.New("cleanup complete branch inventory changed during capture")
+	}
+	final, err := n.Transport.ReadDeliveryRepository(ctx)
 	if err != nil {
 		return nil, err
 	}
 	finalDefault, err := contract.ObjectAt(final, "defaultBranchRef")
-	if err != nil || final["id"] != repository["id"] || finalDefault["name"] != defaultBranch {
-		return nil, errors.New("cleanup repository identity or default branch changed during inventory")
+	if err != nil || final["id"] != repository["id"] || finalDefault["name"] != defaultBranch || final["deleteBranchOnMerge"] != repository["deleteBranchOnMerge"] {
+		return nil, errors.New("cleanup repository identity, default branch or retention policy changed during inventory")
 	}
 	return contract.Object{"repo": n.Transport.Repository.Object(), "repository_node_id": repository["id"], "default_branch": defaultBranch, "branches": candidates,
-		"provenance": contract.Object{"live": true, "complete": true, "source": "github_api", "repository_node_id": repository["id"], "selection": selection}}, nil
+		"branch_evidence": contract.Object{"inventory": branchInventory, "delete_branch_on_merge": repository["deleteBranchOnMerge"]},
+		"provenance":      contract.Object{"live": true, "complete": true, "source": "github_api", "repository_node_id": repository["id"], "selection": selection}}, nil
 }
 
 // A branch can be reused without moving its SHA. The selected merged PR alone
