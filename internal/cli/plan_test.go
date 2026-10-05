@@ -67,13 +67,71 @@ func TestPlanExtractPreservesCanonicalNumbersAndUnicodeWithoutCheckout(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantResultPath := filepath.Join(resolvedRoot, "scratch", "reviewed-plan.json")
 	repo, repoErr := contract.ObjectAt(result, "repository")
 	if repoErr != nil || result["command"] != "plan-extract" || repo["nameWithOwner"] != repository.FullName() {
 		t.Fatalf("unexpected extraction result envelope: %#v", result)
 	}
 	data, err := contract.ObjectAt(result, "data")
-	if err != nil || data["plan_sha256"] != plan.SHA256 || data["plan_command"] != plan.Command || data["path"] != outPath {
+	if err != nil || data["plan_sha256"] != plan.SHA256 || data["plan_command"] != plan.Command || data["path"] != wantResultPath {
 		t.Fatalf("unexpected extraction result data: %#v (%v)", data, err)
+	}
+}
+
+func TestPlanExtractReportsResolvedPathForSymlinkRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	rootAlias := filepath.Join(parent, "root-alias")
+	if err := os.Symlink(root, rootAlias); err != nil {
+		t.Fatal(err)
+	}
+	repository, plan := planExtractionFixture(t, "example", "widgets", "execution-sync")
+	input, err := contract.Canonical(planExtractionEnvelope(plan, "execution-sync-prepare"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "prepare.json"), input, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err = (Runner{Out: &stdout, Err: &stderr}).Run(context.Background(), []string{
+		"plan", "extract", "--repo-root", rootAlias, "--repo", repository.URL,
+		"--input", "envelope=prepare.json", "--outer-command", "execution-sync-prepare",
+		"--plan-command", "execution-sync", "--out", "reviewed-plan.json",
+	})
+	if err != nil {
+		t.Fatal(err, stderr.String())
+	}
+	result, err := contract.Decode(&stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := contract.ObjectAt(result, "data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(rootAlias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(resolvedRoot, "reviewed-plan.json")
+	if data["path"] != wantPath {
+		t.Fatalf("reported path should identify the resolved root: got %#v, want %q", data["path"], wantPath)
+	}
+	got, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(mustCanonical(t, plan.Object()), '\n')
+	if !bytes.Equal(got, want) {
+		t.Fatalf("symlink-root extraction changed its canonical bytes\n got: %s\nwant: %s", got, want)
 	}
 }
 
