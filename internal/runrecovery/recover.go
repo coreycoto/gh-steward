@@ -319,6 +319,20 @@ const MaxHistoryAcquisitionBytes = int64(256 << 20)
 // It restores one exact interrupted target, or leaves a typed hold. No provider
 // mutation, new plan or unknown-write replay occurs in this boundary.
 func (e *Engine) Recover(ctx context.Context, reader ActionsReader, invocation Invocation) (Object, error) {
+	return e.recoverWithLegacyCheckpoint(ctx, reader, invocation, nil)
+}
+
+// RecoverWithLegacyCheckpoint admits an explicitly supplied reviewed v5 prefix.
+// It is compared with every hosted checkpoint; an imported prefix never makes
+// an uncovered suffix disappear or enables fallback around conflicting proof.
+func (e *Engine) RecoverWithLegacyCheckpoint(ctx context.Context, reader ActionsReader, invocation Invocation, checkpoint Object) (Object, error) {
+	if checkpoint == nil {
+		return nil, recoveryError("explicit legacy recovery requires a checkpoint")
+	}
+	return e.recoverWithLegacyCheckpoint(ctx, reader, invocation, checkpoint)
+}
+
+func (e *Engine) recoverWithLegacyCheckpoint(ctx context.Context, reader ActionsReader, invocation Invocation, imported Object) (Object, error) {
 	if !nonemptyString(invocation.RunName) || !nonemptyString(invocation.RecoveryKey) {
 		return nil, errors.New("current workflow run title and semantic recovery key are required")
 	}
@@ -340,6 +354,16 @@ func (e *Engine) Recover(ctx context.Context, reader ActionsReader, invocation I
 	candidates, err := checkpointCandidates(ctx, reader, e, target, observed, attempts, allArtifacts, invocation.RunID, invocation.Attempt)
 	if err != nil {
 		return hold(err)
+	}
+	if imported != nil {
+		if err := validateExplicitLegacyCheckpoint(imported); err != nil {
+			return hold(err)
+		}
+		checked, err := e.ValidateChain(imported, target, observed, attempts)
+		if err != nil {
+			return hold(err)
+		}
+		candidates = append(candidates, checked)
 	}
 	chain, err := e.SelectCheckpoint(candidates, target, observed, attempts)
 	if err != nil {

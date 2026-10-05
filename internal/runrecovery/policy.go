@@ -22,6 +22,7 @@ type workflowPolicy struct {
 	mutatorAlternatives [][]string
 	allowPublication    bool
 	plans               map[string]planPolicy
+	legacyImportReviews map[string]bool
 }
 
 type planPolicy struct {
@@ -88,7 +89,7 @@ func NewEngine(policy Object, repository contract.Repository) (*Engine, error) {
 }
 
 func parseWorkflowPolicy(value any, workflow string) (workflowPolicy, error) {
-	raw, err := Exact(value, []string{"mutator_step_alternatives", "reviewed_source_shas", "allow_publication", "plans"}, "workflow policy")
+	raw, err := exactWithOptional(value, []string{"mutator_step_alternatives", "reviewed_source_shas", "allow_publication", "plans"}, []string{"legacy_import_reviews"}, "workflow policy")
 	if err != nil {
 		return workflowPolicy{}, err
 	}
@@ -160,7 +161,20 @@ func parseWorkflowPolicy(value any, workflow string) (workflowPolicy, error) {
 	if completedMergeCloseouts > 1 {
 		return workflowPolicy{}, recoveryError("workflow policy may configure only one completed-merge closeout")
 	}
-	return workflowPolicy{alternatives, allowPublication, plans}, nil
+	legacyReviews := map[string]bool{}
+	if value, exists := raw["legacy_import_reviews"]; exists {
+		rows, err := stringsArray(value, "exact legacy import reviews", false)
+		if err != nil || len(rows) > maxPendingAttempts {
+			return workflowPolicy{}, recoveryError("legacy import reviews must be a bounded exact digest inventory")
+		}
+		for _, digest := range rows {
+			if !IsSHA256(digest) || legacyReviews[digest] {
+				return workflowPolicy{}, recoveryError("legacy import review digests are invalid or repeated")
+			}
+			legacyReviews[digest] = true
+		}
+	}
+	return workflowPolicy{mutatorAlternatives: alternatives, allowPublication: allowPublication, plans: plans, legacyImportReviews: legacyReviews}, nil
 }
 
 func parsePlanPolicy(value any, workflow, name string) (planPolicy, error) {

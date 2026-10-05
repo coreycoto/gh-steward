@@ -140,6 +140,8 @@ Publication uses a trusted control checkout at the runtime's `GITHUB_WORKFLOW_SH
 
 Archive acquisition is bounded to 1,024 checkpoint artifacts and 256 MiB per scan category, with 32 MiB archives, 1,000 entries and 8 MiB individual files. Exceeding a budget creates a hold; it never truncates history. Authenticated checkpoint compaction is not implemented. See the [workflow-recovery skill](plugins/gh-steward/skills/gh-steward-workflow-recovery/SKILL.md) and its [protocol reference](plugins/gh-steward/skills/gh-steward-workflow-recovery/references/run-protocol.md) for integration contracts.
 
+Legacy attempts without native receipts remain held until their exact archived evidence is independently reviewed. The provider-free `runs legacy-review` command verifies a signed evidence packet; a separate read-only preview and explicit local import can append a provenance-preserving chain-v5 outcome. These commands print summaries only; `--out` writes the full envelope to a private mode-0600 checkout file. Explicit legacy checkpoints must end at their final reviewed import and are compared with hosted checkpoints before recovery. See the [legacy evidence reference](plugins/gh-steward/skills/gh-steward-workflow-recovery/references/legacy-evidence.md) for raw input contracts and trust boundaries. This does not create native plans, journals, or provider receipts.
+
 ## Development and release
 
 Run tests and checks without GitHub credentials or live provider writes:

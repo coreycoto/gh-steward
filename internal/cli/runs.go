@@ -23,6 +23,9 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 		return errors.New("runs requires an action")
 	}
 	action := args[0]
+	if action == "legacy-review" || action == "legacy-import-preview" || action == "import-legacy" {
+		return r.runLegacyRecovery(ctx, args)
+	}
 	flags := flag.NewFlagSet("gh steward runs "+action, flag.ContinueOnError)
 	flags.SetOutput(r.Err)
 	root := flags.String("repo-root", ".", "trusted checkout root")
@@ -193,12 +196,26 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 					return err
 				}
 			}
+		} else if action == "recover" && len(inputs) != 0 {
+			value, inputErr := r.recoveryDocument(checkout, inputs, "legacy-checkpoint")
+			if inputErr != nil {
+				return inputErr
+			}
+			var ok bool
+			input, ok = value.(contract.Object)
+			if !ok {
+				return errors.New("legacy checkpoint must be a raw settlement chain object")
+			}
 		} else if len(inputs) != 0 {
 			return errors.New("this runs action does not accept named inputs")
 		}
 		switch action {
 		case "recover":
-			data, err = engine.Recover(ctx, reader, invocation)
+			if input == nil {
+				data, err = engine.Recover(ctx, reader, invocation)
+			} else {
+				data, err = engine.RecoverWithLegacyCheckpoint(ctx, reader, invocation, input)
+			}
 		case "finalize":
 			data, err = engine.Finalize(ctx, reader, runrecovery.FinalizeOptions{Invocation: invocation, ArtifactID: *artifactID, ArtifactDigest: *artifactDigest, Checkpoint: *checkpoint, RecoverySource: *source, PublicationProof: *publicationProof, WorkflowSHA: *workflowSHA})
 		case "qualify-prepared":
