@@ -17,6 +17,7 @@ import (
 type deliveryNativeFixture struct {
 	merged, deleted, dependent, malformedChecks, branchDrift bool
 	foreignClosing, changedClosingHead, retentionDrift       bool
+	autoDelete                                               bool
 	omitHeadID, headIdentityDrift                            bool
 	openHead, headIsDraft, headIsSelected, failHeadRead      bool
 	failFacet                                                string
@@ -70,7 +71,7 @@ func (f *deliveryNativeFixture) Execute(_ context.Context, _ string, args []stri
 		switch {
 		case strings.Contains(query, "deleteBranchOnMerge"):
 			f.deliveryRepoReads++
-			r["deleteBranchOnMerge"] = f.retentionDrift && f.deliveryRepoReads > 1
+			r["deleteBranchOnMerge"] = f.autoDelete != (f.retentionDrift && f.deliveryRepoReads > 1)
 		case strings.Contains(query, "ref(qualifiedName"):
 			name := strings.TrimPrefix(variables["ref"].(string), "refs/heads/")
 			sha := strings.Repeat("a", 40)

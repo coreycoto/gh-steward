@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.2.1 — Unreleased
+## 0.3.0 — Unreleased
+
+- Add explicit offline legacy evidence review, complete live import previews, and policy-reviewed local history imports under `runs`. Preserve original signed evidence and per-effect dispositions without fabricating native completion receipts.
+- Keep imported history in an immutable private store with exact predecessor links, durable interrupted-import recovery, and separately reviewed import digests.
+- Record an exact merged branch already absent from complete live inventory as a typed zero-write cleanup outcome. Bind the reviewed PR, repository incarnation, head lease, complete branch inventory, and current retention setting; retain drift and draft-PR protections.
+- Preserve the exact completed merge parent and existing absent-branch cleanup child across interruption. Resume only that zero-operation child, without replaying the parent or attributing an earlier deletion to the no-op.
+
+## 0.2.1 — 2026-10-05
 
 - Fix Project fields and items query selections so each field remains a separate GraphQL selection.
 - Align workflow Project-field checks with normalized types and named option identities.

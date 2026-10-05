@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/coreycoto/gh-steward/internal/contract"
+	"github.com/coreycoto/gh-steward/internal/workflow"
 )
 
 var (
@@ -130,7 +132,13 @@ func ValidateRecoveredTerminalProof(proof any, target Object) ([]Object, error) 
 		seenNames[name] = true
 		sourceContextPlans := sourceContext["plans"].([]any)
 		sourceContextPlan := sourceContextPlans[index].(map[string]any)
-		if original["journal_file"] == nil && sourceContextPlan["status"] != "prepared" {
+		if sourceContextPlan["status"] == "prepared" {
+			return nil, errors.New("recovered source contains an unstarted native plan")
+		}
+		zeroOperationCandidate := len(source.plans) == 2 && index == 1 && name == "branch-cleanup" &&
+			original["command"] == workflow.BranchCleanupCommand && sourceContextPlan["status"] == "dispatching" &&
+			sourceContextPlans[0].(map[string]any)["status"] == "completed"
+		if original["journal_file"] == nil && sourceContextPlan["status"] != "prepared" && !zeroOperationCandidate {
 			return nil, errors.New("a started source plan lost its durable native journal")
 		}
 		if sourceContextPlan["status"] == "completed" {
@@ -144,6 +152,8 @@ func ValidateRecoveredTerminalProof(proof any, target Object) ([]Object, error) 
 			if _, err := ValidateTerminalPlanProof(original); err != nil {
 				return nil, fmt.Errorf("completed source parent receipt is invalid: %w", err)
 			}
+		} else if original["apply_result_file"] != nil {
+			return nil, errors.New("dispatching source plan cannot claim a terminal apply result")
 		}
 		plan, err := ValidateTerminalPlanProof(completed)
 		if err != nil {
@@ -167,17 +177,215 @@ func ValidateRecoveredTerminalProof(proof any, target Object) ([]Object, error) 
 		if err != nil || SHA256(identityBytes) != original["journal_id"] {
 			return nil, errors.New("original native journal identity differs from its exact plan")
 		}
-		dispatches, err := observerSourceProgress(original, completed, plan)
-		if err != nil {
-			return nil, err
+		if zeroOperationCandidate && len(plan["operations"].([]any)) == 0 {
+			if err := validateRecoveredZeroOperationCleanup(source, sourceContext, index, original, completed, plan, decoded[index-1]); err != nil {
+				return nil, fmt.Errorf("source is not the exact completed-merge all-absent cleanup continuation: %w", err)
+			}
+		} else if zeroOperationCandidate {
+			if original["journal_file"] == nil {
+				return nil, errors.New("nonzero cleanup source plan lost its durable native journal")
+			}
+			dispatches, err := observerSourceProgress(original, completed, plan)
+			if err != nil {
+				return nil, err
+			}
+			persistedDispatches += dispatches
+		} else {
+			dispatches, err := observerSourceProgress(original, completed, plan)
+			if err != nil {
+				return nil, err
+			}
+			persistedDispatches += dispatches
 		}
-		persistedDispatches += dispatches
 		decoded = append(decoded, plan)
 	}
 	if persistedDispatches == 0 {
 		return nil, errors.New("interrupted source lacks any persisted native dispatch identity")
 	}
 	return decoded, nil
+}
+
+func validateRecoveredZeroOperationCleanup(source observerAttemptRecord, sourceContext Object, childIndex int, childSourceProof, childObserverProof, childPlanValue, parentPlanValue Object) error {
+	if childIndex != 1 || len(source.plans) != 2 || childSourceProof["name"] != "branch-cleanup" ||
+		childSourceProof["command"] != workflow.BranchCleanupCommand || childSourceProof["apply_result_file"] != nil {
+		return errors.New("cleanup source is not the sole dispatching child without a source result")
+	}
+	contextPlans, err := array(sourceContext["plans"], "zero-operation source plans")
+	if err != nil || len(contextPlans) != 2 {
+		return errors.New("cleanup source context does not contain exactly its completed parent and child")
+	}
+	parentContext, err := object(contextPlans[0], "zero-operation parent context")
+	if err != nil || parentContext["name"] != "merge" || parentContext["command"] != workflow.MergeCommand || parentContext["status"] != "completed" {
+		return errors.New("zero-operation cleanup source lacks its exact completed merge parent")
+	}
+	childContext, err := object(contextPlans[1], "zero-operation child context")
+	if err != nil || childContext["status"] != "dispatching" || childContext["sha256"] != childSourceProof["plan_sha256"] ||
+		childContext["journal_id"] != childSourceProof["journal_id"] {
+		return errors.New("zero-operation cleanup source context differs from its exact plan proof")
+	}
+	parentProof, err := object(source.plans[0], "completed source merge proof")
+	if err != nil || parentProof["name"] != "merge" || parentProof["command"] != workflow.MergeCommand {
+		return errors.New("zero-operation cleanup source does not retain its exact merge proof")
+	}
+	parentPlan, err := contract.ParsePlan(parentPlanValue)
+	if err != nil || parentPlan.Command != workflow.MergeCommand {
+		return errors.New("zero-operation cleanup parent is not the exact native merge plan")
+	}
+	mergeAdapter := workflow.MergeAdapter{}
+	mergeOperations, err := mergeAdapter.Operations(parentPlan)
+	if err != nil || len(mergeOperations) != 1 || !Equal(operationObjects(mergeOperations), parentPlanValue["operations"]) {
+		return errors.New("zero-operation cleanup parent does not contain its exact merge operation")
+	}
+	parentJournalValue, err := LoadFileProof(parentProof["journal_file"], "completed merge parent journal")
+	if err != nil {
+		return err
+	}
+	parentJournal, err := Exact(parentJournalValue, observerJournalFields, "completed merge parent journal")
+	if err != nil {
+		return err
+	}
+	parentSteps, err := array(parentJournal["steps"], "completed merge parent dispatches")
+	if err != nil || len(parentSteps) != 1 {
+		return errors.New("zero-operation cleanup parent lacks exactly one acknowledged merge")
+	}
+	parentStep, err := object(parentSteps[0], "completed merge parent receipt")
+	if err != nil || parentStep["status"] != "completed" {
+		return errors.New("zero-operation cleanup parent merge is not positively complete")
+	}
+	mergeReceipt, err := object(parentStep["result"], "completed merge provider receipt")
+	if err != nil || mergeAdapter.ValidateReceipt(parentPlan, mergeOperations[0], mergeReceipt) != nil {
+		return errors.New("zero-operation cleanup parent receipt does not prove its exact merge")
+	}
+	mergeACK, err := object(mergeReceipt["provider_ack"], "completed merge provider acknowledgement")
+	if err != nil {
+		return err
+	}
+	mergeCommit, err := contract.Nonempty(mergeACK, "sha")
+	if err != nil {
+		return errors.New("zero-operation cleanup parent receipt lacks its exact merge commit")
+	}
+	settings, err := recoveredParentRepositorySettings(source.policyFiles)
+	if err != nil {
+		return err
+	}
+	settingsRepositoryValue, err := object(settings["repository"], "completed merge repository settings identity")
+	if err != nil {
+		return err
+	}
+	settingsRepository, err := contract.ParseRepository(settingsRepositoryValue)
+	if err != nil || settingsRepository != parentPlan.Repository || !strings.EqualFold(fmt.Sprint(settings["owner_login"]), settingsRepository.Owner) ||
+		!strings.EqualFold(fmt.Sprint(settings["name"]), settingsRepository.Name) {
+		return errors.New("zero-operation cleanup settings identify another repository")
+	}
+	parentInventory, err := contract.ObjectAt(parentPlan.Data, "inventory")
+	if err != nil {
+		return err
+	}
+	parentRepositoryInventory, err := contract.ObjectAt(parentInventory, "repository")
+	if err != nil || parentRepositoryInventory["id"] != settings["repository_node_id"] || parentRepositoryInventory["defaultBranch"] != settings["default_branch"] {
+		return errors.New("zero-operation cleanup parent repository settings differ from its merge inventory")
+	}
+	parentPR, err := contract.ObjectAt(parentInventory, "pull_request")
+	if err != nil {
+		return err
+	}
+	childPlan, err := contract.ParsePlan(childPlanValue)
+	if err != nil || childPlan.Command != workflow.BranchCleanupCommand || childPlan.Repository != parentPlan.Repository || len(childPlan.Operations) != 0 {
+		return errors.New("cleanup child is not an exact zero-operation plan for its merge repository")
+	}
+	cleanupOperations, err := (workflow.BranchCleanup{}).Operations(childPlan)
+	if err != nil || len(cleanupOperations) != 0 || !Equal(operationObjects(cleanupOperations), childPlanValue["operations"]) {
+		return errors.New("cleanup child does not recompute to an exact all-absent zero-operation plan")
+	}
+	cleanupInventory, err := contract.ObjectAt(childPlan.Data, "inventory")
+	if err != nil || cleanupInventory["repository_node_id"] != settings["repository_node_id"] || cleanupInventory["default_branch"] != settings["default_branch"] {
+		return errors.New("cleanup child repository incarnation or default branch differs from its merge parent")
+	}
+	branchEvidence, err := contract.ObjectAt(cleanupInventory, "branch_evidence")
+	if err != nil || branchEvidence["delete_branch_on_merge"] != settings["delete_branch_on_merge"] {
+		return errors.New("cleanup child retention evidence differs from its merge parent settings")
+	}
+	cleanupRows, err := contract.Objects(cleanupInventory, "branches")
+	if err != nil || len(cleanupRows) != 1 {
+		return errors.New("cleanup child does not retain exactly its merged pull request")
+	}
+	cleanupPR, err := contract.ObjectAt(cleanupRows[0], "pull_request")
+	cleanupNumberText := fmt.Sprint(cleanupPR["number"])
+	cleanupNumber, numberErr := strconv.ParseInt(cleanupNumberText, 10, 64)
+	if err != nil || numberErr != nil || cleanupNumber < 1 || cleanupPR["id"] != parentPR["id"] || cleanupPR["id"] != mergeOperations[0].Target["node_id"] ||
+		!nativeNonemptyValue(cleanupPR["headRefName"]) || cleanupPR["headRefName"] != parentPR["headRefName"] ||
+		cleanupNumber != mergeOperations[0].Target["number"] || cleanupPR["headRefOid"] != mergeOperations[0].Target["head_sha"] ||
+		cleanupPR["merge_commit_sha"] != mergeCommit {
+		return errors.New("cleanup child pull request or merge commit differs from its acknowledged parent")
+	}
+	sourceTarget, err := object(sourceContext["attempt_target"], "completed merge source target")
+	if err != nil || !Equal(sourceTarget, Object{"plan_sha256": parentPlan.SHA256}) {
+		return errors.New("completed merge source attempt target differs from its exact parent plan")
+	}
+	if childSourceProof["journal_file"] != nil {
+		sourceJournalValue, err := LoadFileProof(childSourceProof["journal_file"], "zero-operation source journal")
+		if err != nil {
+			return err
+		}
+		sourceJournal, err := Exact(sourceJournalValue, observerJournalFields, "zero-operation source journal")
+		if err != nil {
+			return err
+		}
+		childRepository, err := nativePlanRepository(childPlanValue)
+		if err != nil {
+			return err
+		}
+		journalIdentity := Object{"schema_version": int64(2), "repository": childRepository, "command": childPlan.Command, "plan_sha256": childPlan.SHA256}
+		if !Equal(sourceJournal["identity"], journalIdentity) {
+			return errors.New("zero-operation source journal differs from the exact cleanup plan")
+		}
+		steps, err := array(sourceJournal["steps"], "zero-operation source journal steps")
+		if err != nil || len(steps) != 0 {
+			return errors.New("zero-operation source journal contains an unreviewed dispatch")
+		}
+		observerJournalValue, err := LoadFileProof(childObserverProof["journal_file"], "zero-operation observer journal")
+		if err != nil {
+			return err
+		}
+		observerJournal, err := Exact(observerJournalValue, observerJournalFields, "zero-operation observer journal")
+		if err != nil || !Equal(sourceJournal["identity"], observerJournal["identity"]) ||
+			(sourceJournal["result"] != nil && !Equal(sourceJournal["result"], observerJournal["result"])) {
+			return errors.New("zero-operation observer journal differs from the exact source identity or result")
+		}
+	}
+	return nil
+}
+
+func recoveredParentRepositorySettings(raw any) (Object, error) {
+	files, err := object(raw, "source policy files")
+	if err != nil {
+		return nil, err
+	}
+	fields := []string{"schema_version", "repository", "repository_node_id", "owner_login", "owner_type", "name", "default_branch", "delete_branch_on_merge"}
+	var settings Object
+	for _, rawProof := range files {
+		value, err := LoadFileProof(rawProof, "source policy file")
+		if err != nil {
+			return nil, err
+		}
+		candidate, candidateErr := Exact(value, fields, "merge repository settings")
+		if candidateErr != nil {
+			continue
+		}
+		if settings != nil {
+			return nil, errors.New("zero-operation cleanup source contains ambiguous repository settings")
+		}
+		settings = candidate
+	}
+	if settings == nil || !observerIntegerIs(settings["schema_version"], 1) || !nativeNonemptyValue(settings["repository_node_id"]) ||
+		!nativeNonemptyValue(settings["default_branch"]) || !nativeNonemptyValue(settings["owner_login"]) ||
+		(settings["owner_type"] != "User" && settings["owner_type"] != "Organization") {
+		return nil, errors.New("zero-operation cleanup source lacks exact merge repository settings")
+	}
+	if _, err := contract.Bool(settings, "delete_branch_on_merge"); err != nil {
+		return nil, err
+	}
+	return settings, nil
 }
 
 type observerAttemptRecord struct {

@@ -1257,6 +1257,14 @@ func (e *Engine) validateCompletedMergeContinuation(context, childEntry, childPl
 	if err := mergeAdapter.ValidateReceipt(parsedParent, operations[0], receipt); err != nil {
 		return recoveryError("completed merge lacks a positive exact provider acknowledgement")
 	}
+	mergeACK, err := contract.ObjectAt(receipt, "provider_ack")
+	if err != nil {
+		return recoveryError("completed merge receipt lacks its exact provider acknowledgement")
+	}
+	mergeCommitSHA, err := contract.Nonempty(mergeACK, "sha")
+	if err != nil {
+		return recoveryError("completed merge receipt lacks its exact merge commit")
+	}
 	settingsValue, _, err := reader.read(parentPolicy.settingsPath, "completed merge repository settings")
 	if err != nil {
 		return err
@@ -1316,7 +1324,110 @@ func (e *Engine) validateCompletedMergeContinuation(context, childEntry, childPl
 	if childPolicy.parentMerge == nil || *childPolicy.parentMerge != parentPolicy {
 		return recoveryError("composed cleanup parent policy changed during validation")
 	}
+	parsedChild, err := contract.ParsePlan(childPlan)
+	if err != nil {
+		return recoveryError("composed cleanup child is not an exact native plan")
+	}
+	cleanupOperations, err := (workflow.BranchCleanup{}).Operations(parsedChild)
+	if err != nil || !Equal(operationObjects(cleanupOperations), childPlan["operations"]) {
+		return recoveryError("composed cleanup child does not pass its exact branch-cleanup policy")
+	}
+	if len(cleanupOperations) == 0 && !isAllAbsentBranchCleanup(parsedChild) {
+		return recoveryError("zero-operation cleanup lacks exact positive absent-branch evidence")
+	}
+	cleanupInventory, err := object(childData["inventory"], "composed cleanup inventory")
+	if err != nil || cleanupInventory["repository_node_id"] != settings["repository_node_id"] {
+		return recoveryError("branch cleanup repository incarnation differs from the completed merge")
+	}
+	cleanupRows, err := contract.Objects(cleanupInventory, "branches")
+	if err != nil || len(cleanupRows) != 1 {
+		return recoveryError("composed cleanup must retain its exact merged pull request row")
+	}
+	cleanupRow, err := object(cleanupRows[0], "composed cleanup branch row")
+	if err != nil {
+		return err
+	}
+	cleanupPR, err := object(cleanupRow["pull_request"], "composed cleanup pull request")
+	if err != nil || !nonemptyString(pr["id"]) || cleanupPR["id"] != pr["id"] || cleanupPR["merge_commit_sha"] != mergeCommitSHA {
+		return recoveryError("branch cleanup pull request identity differs from the completed merge")
+	}
+	if rawEvidence, exists := cleanupInventory["branch_evidence"]; exists {
+		evidence, err := object(rawEvidence, "composed cleanup branch evidence")
+		if err != nil || evidence["delete_branch_on_merge"] != settings["delete_branch_on_merge"] {
+			return recoveryError("branch cleanup retention setting differs from the completed merge inventory")
+		}
+	}
 	return nil
+}
+
+// isAllAbsentBranchCleanup recognizes only a nonempty, complete no-op cleanup
+// child. The caller must first validate its completed-merge continuation and
+// retained parent receipt through validateCompletedMergeContinuation.
+func isAllAbsentBranchCleanup(plan contract.Plan) bool {
+	if plan.Command != workflow.BranchCleanupCommand || len(plan.Operations) != 0 {
+		return false
+	}
+	data := plan.Data
+	selection, err := contract.ObjectAt(data, "selection")
+	if err != nil {
+		return false
+	}
+	selected, err := contract.Objects(selection, "branches")
+	if err != nil || len(selected) == 0 {
+		return false
+	}
+	absent, err := contract.Objects(data, "already_absent")
+	if err != nil || len(absent) != len(selected) {
+		return false
+	}
+	inventory, err := contract.ObjectAt(data, "inventory")
+	if err != nil {
+		return false
+	}
+	if _, ok := inventory["branch_evidence"]; !ok {
+		return false
+	}
+	operations, err := (workflow.BranchCleanup{}).Operations(plan)
+	return err == nil && len(operations) == 0
+}
+
+// completedMergeZeroOperationCleanup identifies the sole journal-free native
+// continuation that can be observed safely: an existing dispatching cleanup
+// child whose exact merged parent and all-absent child evidence were validated
+// by the caller's recovery-policy pass.
+func (e *Engine) completedMergeZeroOperationCleanup(context, entry, plan Object) bool {
+	name, ok := entry["name"].(string)
+	if !ok {
+		return false
+	}
+	wfPolicy, err := e.workflowPolicy(fmt.Sprint(context["workflow_file"]))
+	if err != nil {
+		return false
+	}
+	childName, closeout, ok := completedMergeCloseout(wfPolicy)
+	if !ok || name != childName || closeout.parentMerge == nil || entry["status"] != "dispatching" {
+		return false
+	}
+	parent, child, err := e.completedMergeContextEntries(context, closeout.parentMerge)
+	if err != nil || parent["status"] != "completed" || !Equal(child, entry) {
+		return false
+	}
+	parsed, err := contract.ParsePlan(plan)
+	return err == nil && parsed.SHA256 == entry["sha256"] && isAllAbsentBranchCleanup(parsed)
+}
+
+func (e *Engine) completedMergeParentEntry(context, entry Object) bool {
+	wfPolicy, err := e.workflowPolicy(fmt.Sprint(context["workflow_file"]))
+	if err != nil {
+		return false
+	}
+	_, closeout, ok := completedMergeCloseout(wfPolicy)
+	if !ok || closeout.parentMerge == nil || entry["name"] != closeout.parentMerge.planName ||
+		entry["command"] != closeout.parentMerge.command || entry["status"] != "completed" {
+		return false
+	}
+	parent, _, err := e.completedMergeContextEntries(context, closeout.parentMerge)
+	return err == nil && Equal(parent, entry)
 }
 
 func operationObjects(operations []contract.Operation) []any {

@@ -28,7 +28,7 @@ func TestNativeBranchCleanupRequiresCompleteCurrentRefsAndMergedPRs(t *testing.T
 		})
 	}
 	for name, fixture := range map[string]*deliveryNativeFixture{
-		"PR still open": {}, "draft dependent PR": {merged: true, dependent: true}, "branch already absent": {merged: true, deleted: true},
+		"PR still open": {}, "draft dependent PR": {merged: true, dependent: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := PrepareBranchCleanup(context.Background(), NativeBranchCleanup{Transport: bridgeTransport(fixture)}, testRepo(), branchTestSelection(1), time.Now()); err == nil {

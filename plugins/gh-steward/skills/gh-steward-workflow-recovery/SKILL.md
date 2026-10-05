@@ -20,6 +20,16 @@ Keep current-run no-op completion separate from plan preparation. Only `finish-n
 
 After an actual normal artifact upload, `finalize` verifies exact retained bytes and creates a new checkpoint if the invocation is terminal. Keep the original upload and checkpoint receipts. A green workflow, upload success, or context phase alone does not establish terminal execution.
 
+Branch cleanup in 0.3.0 can retain a typed `already_absent` outcome with zero
+operations after complete live evidence proves the exact merged PR's branch
+is absent. Keep the actual completed merge parent and its existing reviewed
+cleanup child. Interrupted recovery may resume that exact zero-write child;
+it never replays the parent or creates a new child in an observer context.
+An absent branch cannot resolve an uncertain deletion without the original
+positive acknowledgement.
+
 ## Reviewed legacy evidence
 
 Use `runs legacy-review` for offline verification of one exact signed attempt, then use the read-only import preview to capture complete current Actions history and an explicit local import only after its exact review digest is separately listed in the trusted workflow policy. These commands print summaries only; `--out` writes the full sensitive envelope to a private mode-0600 file. A review digest or `--approve-review-sha` is an artifact identity check, not human approval or a provider-write grant. The import preserves the raw report and archival packet as a chain-v5 legacy outcome; it does not synthesize a native plan, journal, or completion receipt. An explicit legacy checkpoint ends at its final reviewed import, with no native suffix or open prepared frontier; any later native suffix must come from authenticated hosted checkpoint acquisition and match the explicit prefix. SDK-v1 observations can be retained as effects, but never establish terminal completion. Read the [legacy evidence reference](references/legacy-evidence.md) for exact document shapes, sample commands, disposition rules, and the archive-key trust boundary.
+
+The legacy review and import commands require CLI 0.3.0 or later.

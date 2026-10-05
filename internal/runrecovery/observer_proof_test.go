@@ -106,6 +106,17 @@ func TestRecoveredTerminalProofRejectsNoPersistedDispatchAndLexicalNumbers(t *te
 	_ = contextProof
 }
 
+func TestRecoveredTerminalProofRejectsApplyResultOnDispatchingSource(t *testing.T) {
+	proof, target := makeRecoveredTerminalProof(t)
+	source := proof["source"].(Object)
+	sourcePlan := source["plans"].([]any)[0].(Object)
+	observerPlan := proof["observer"].(Object)["plans"].([]any)[0].(Object)
+	sourcePlan["apply_result_file"] = observerPlan["apply_result_file"]
+	if _, err := ValidateRecoveredTerminalProof(proof, target); err == nil {
+		t.Fatal("dispatching source plan with an injected terminal apply result was accepted")
+	}
+}
+
 func TestRecoveredTerminalProofCannotAlterCompletedSourceReceipt(t *testing.T) {
 	proof, target := makeRecoveredTerminalProof(t)
 	source := proof["source"].(Object)

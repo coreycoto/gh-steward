@@ -266,6 +266,8 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 		}
 		persistedDispatches := 0
 		unstartedPlans := 0
+		completedMergeParentReceipt := false
+		zeroOperationContinuation := false
 		for index, rawPlan := range plans {
 			proof, err := exactWithOptional(rawPlan, []string{"name", "command", "plan_sha256", "journal_id", "plan_file", "journal_file"}, []string{"apply_result_file"}, "source native plan proof")
 			if err != nil {
@@ -292,6 +294,7 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 				parsedPlan.Repository.FullName() != strings.ToLower(e.repository.Owner+"/"+e.repository.Name) || parsedPlan.Repository.Host != e.repository.Host {
 				return nil, recoveryError("source native plan differs from its exact hash, command or repository")
 			}
+			zeroOperationPlan := e.completedMergeZeroOperationCleanup(sourceContext, entry, plan)
 			planPath, ok := entry["path"].(string)
 			if !ok || !safePolicyRelativePath(planPath) {
 				return nil, recoveryError("source native plan has an unsafe package path")
@@ -308,18 +311,25 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 				if _, err := ValidateTerminalPlanProof(proof); err != nil {
 					return nil, recoveryError("completed parent source receipt is invalid: %v", err)
 				}
+				if e.completedMergeParentEntry(sourceContext, entry) {
+					completedMergeParentReceipt = true
+				}
 			} else if journalProof == nil {
 				if proof["apply_result_file"] != nil {
 					return nil, recoveryError("unstarted source plan contains an unbound apply result")
 				}
-				if entry["status"] != "prepared" {
+				if entry["status"] != "prepared" && !(entry["status"] == "dispatching" && zeroOperationPlan && completedMergeParentReceipt) {
 					return nil, recoveryError("started source plan lost its exact persisted native journal")
 				}
 				journalPath := "journal/" + fmt.Sprint(entry["journal_id"]) + ".json"
 				if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(journalPath))); !errors.Is(err, os.ErrNotExist) {
 					return nil, recoveryError("journal-free prepared source contains an unbound journal path")
 				}
-				unstartedPlans++
+				if entry["status"] == "prepared" {
+					unstartedPlans++
+				} else {
+					zeroOperationContinuation = true
+				}
 			} else {
 				journalBytes, err := LoadRawFileProof(journalProof, "source native journal")
 				if err != nil {
@@ -342,13 +352,20 @@ func (e *Engine) observeContext(root string, fields Object) (Object, error) {
 				if err != nil {
 					return nil, err
 				}
-				if dispatches == 0 {
+				if dispatches == 0 && !(entry["status"] == "dispatching" && zeroOperationPlan && completedMergeParentReceipt) {
 					return nil, recoveryError("unfinished source journal has no positive native dispatch receipt")
 				}
-				persistedDispatches += dispatches
+				if dispatches > 0 {
+					persistedDispatches += dispatches
+				} else {
+					if proof["apply_result_file"] != nil {
+						return nil, recoveryError("zero-operation continuation contains an unbound apply result")
+					}
+					zeroOperationContinuation = true
+				}
 			}
 		}
-		if persistedDispatches == 0 {
+		if persistedDispatches == 0 && !(zeroOperationContinuation && completedMergeParentReceipt) {
 			return nil, recoveryError("source has no persisted native dispatch identity and cannot be resumed")
 		}
 		if unstartedPlans != 0 {
@@ -793,6 +810,73 @@ func (e *Engine) InstallRestoredJournal(root, journalRoot, name string) (Object,
 		packageJournal := filepath.Join(root, "journal", fmt.Sprint(entry["journal_id"])+".json")
 		if _, err := os.Lstat(packageJournal); !errors.Is(err, os.ErrNotExist) {
 			return nil, recoveryError("journal-free source package contains unbound native progress")
+		}
+		enginePath, err := confinedRootFile(journalRoot, fmt.Sprint(entry["journal_id"])+".json")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := os.Lstat(enginePath); !errors.Is(err, os.ErrNotExist) {
+			return nil, recoveryError("native engine already has progress absent from the exact source proof")
+		}
+		return Object{"outcome": "no-journal-required", "journal_id": entry["journal_id"]}, nil
+	}
+	if sourcePlan["journal_file"] == nil && source["prepared_qualification"] == nil {
+		if sourcePlan["apply_result_file"] != nil || entry["status"] != "dispatching" {
+			return nil, recoveryError("journal-free continuation has an unsupported status or apply result")
+		}
+		plan, err := e.loadContextPlan(root, context, entry)
+		if err != nil {
+			return nil, err
+		}
+		planProof, err := LoadRawFileProof(sourcePlan["plan_file"], "source plan")
+		if err != nil {
+			return nil, err
+		}
+		planBytes, err := ReadPackageFile(root, fmt.Sprint(entry["path"]))
+		if err != nil || !Equal(planBytes, planProof) {
+			return nil, recoveryError("restored source plan bytes differ from their exact proof")
+		}
+		var sourceEntry Object
+		for _, raw := range sourceContext["plans"].([]any) {
+			row, _ := object(raw, "recovery source context plan")
+			if row["name"] == name {
+				sourceEntry = row
+				break
+			}
+		}
+		if sourceEntry == nil {
+			return nil, recoveryError("source context has no exact journal-free cleanup entry")
+		}
+		policyFiles, err := object(source["policy_files"], "recovery source policy files")
+		if err != nil {
+			return nil, err
+		}
+		rawProofs, err := array(source["plans"], "recovery source plans")
+		if err != nil {
+			return nil, err
+		}
+		retainedPlans := make([]Object, 0, len(rawProofs))
+		for _, raw := range rawProofs {
+			proof, err := exactWithOptional(raw, []string{"name", "command", "plan_sha256", "journal_id", "plan_file", "journal_file"}, []string{"apply_result_file"}, "source native plan proof")
+			if err != nil {
+				return nil, err
+			}
+			retainedPlans = append(retainedPlans, proof)
+		}
+		policyReader := &policyReader{root: root, proofs: policyFiles, used: map[string]bool{}}
+		if err := e.validatePlanPolicyFiles(sourceContext, retainedPlans, policyReader); err != nil {
+			return nil, recoveryError("journal-free source violates its exact recovery policy: %v", err)
+		}
+		if err := validatePolicyFilesUsed(policyFiles, policyReader); err != nil {
+			return nil, err
+		}
+		parsed, err := contract.ParsePlan(plan)
+		if err != nil || !e.completedMergeZeroOperationCleanup(sourceContext, sourceEntry, plan) || !isAllAbsentBranchCleanup(parsed) {
+			return nil, recoveryError("journal-free source is not the exact all-absent completed-merge continuation")
+		}
+		packageJournal := filepath.Join(root, "journal", fmt.Sprint(entry["journal_id"])+".json")
+		if _, err := os.Lstat(packageJournal); !errors.Is(err, os.ErrNotExist) {
+			return nil, recoveryError("journal-free continuation contains unbound native progress")
 		}
 		enginePath, err := confinedRootFile(journalRoot, fmt.Sprint(entry["journal_id"])+".json")
 		if err != nil {
