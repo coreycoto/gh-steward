@@ -856,7 +856,16 @@ gh steward quarter prepare --input payload=FILE
 gh steward merge prepare --policy FILE --input event=FILE
 gh steward backlog|backlog-mutations|review|quarter|merge|execution|artifacts|governance|closeout|delivery|branches apply --input plan=FILE --approve-plan-sha EXACT_SHA256
 gh steward runs digest --input document=FILE
-gh steward runs recover --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH
+gh steward runs legacy-review --input evidence=FILE
+gh steward runs legacy-import-preview --input candidate=FILE [--policy FILE]
+gh steward runs import-legacy --input import=FILE --store PRIVATE_DIRECTORY --approve-review-sha EXACT_SHA256 [--policy FILE]
+  Legacy review is provider-free and never advances settlement history. Import
+  preview uses complete read-only Actions evidence. Import requires an exact
+  consumer-policy review digest and persists one local chain-v5 legacy outcome;
+  it never dispatches a provider write or fabricates a native completion receipt.
+  Legacy commands print summaries. Use --out CHECKOUT_RELATIVE_FILE to retain
+  the complete result privately; stdout never includes raw historical proofs.
+gh steward runs recover --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH [--input legacy-checkpoint=FILE]
 gh steward runs qualify-prepared --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA
 gh steward runs acquire-handoff --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --artifact-id ID --artifact-digest sha256:DIGEST [--purpose apply|transport]
 gh steward runs verify-publication --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA

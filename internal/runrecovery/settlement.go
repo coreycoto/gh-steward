@@ -13,6 +13,7 @@ import (
 )
 
 const settlementSchemaVersion = int64(4)
+const legacySettlementSchemaVersion = int64(5)
 const maxHistoryRuns = 100_000
 const maxPendingAttempts = 100_000
 
@@ -564,6 +565,10 @@ func (e *Engine) ValidateSettlementRecord(value any, targetValue any) (Object, e
 		return nil, recoveryError("settlement evidence lacks a typed kind")
 	}
 	switch kind {
+	case "legacy_no_dispatch", "legacy_terminal_receipt", "legacy_operation_disposition":
+		if err := e.validateLegacySettlement(record, target); err != nil {
+			return nil, err
+		}
 	case "terminal":
 		if artifact == nil || record["context_file"] == nil || attemptTarget["recovery_key"] == nil {
 			return nil, recoveryError("terminal settlement needs its exact artifact, context and attempt target")
@@ -661,7 +666,7 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 	if err != nil {
 		return nil, err
 	}
-	if !exactInt(chain["schema_version"], settlementSchemaVersion) || !Equal(chain["target"], target) {
+	if (!exactInt(chain["schema_version"], settlementSchemaVersion) && !exactInt(chain["schema_version"], legacySettlementSchemaVersion)) || !Equal(chain["target"], target) {
 		return nil, recoveryError("settlement checkpoint is for another repository or workflow target")
 	}
 	inventoryRows, err := array(chain["inventory"], "checkpoint inventory")
@@ -750,6 +755,14 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 		}
 		if err := validateNoopFrontier(record, settledPrefix); err != nil {
 			return nil, err
+		}
+		if isLegacyRecord(record) {
+			if !exactInt(chain["schema_version"], legacySettlementSchemaVersion) {
+				return nil, recoveryError("legacy settlement requires explicitly reviewed chain version 5")
+			}
+			if err := validateLegacyFrontier(record, settledPrefix); err != nil {
+				return nil, err
+			}
 		}
 		recordsByRun[runID] = append(priorAttempts, attempt)
 		settledPrefix = append(settledPrefix, record)
@@ -1085,6 +1098,14 @@ func (e *Engine) AppendSettlement(chainValue Object, target any, observed []Obje
 	}
 	if err := validateNoopFrontier(record, chain["settlements"].([]any)); err != nil {
 		return nil, err
+	}
+	if isLegacyRecord(record) {
+		if !exactInt(chain["schema_version"], legacySettlementSchemaVersion) {
+			return nil, recoveryError("legacy settlement requires explicitly reviewed chain version 5")
+		}
+		if err := validateLegacyFrontier(record, chain["settlements"].([]any)); err != nil {
+			return nil, err
+		}
 	}
 	result, err := cloneObject(chain)
 	if err != nil {
