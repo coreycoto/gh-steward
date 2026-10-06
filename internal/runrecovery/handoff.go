@@ -78,6 +78,20 @@ func (e *Engine) AcquireHandoffFor(ctx context.Context, reader ActionsReader, in
 	if err != nil {
 		return nil, err
 	}
+	if purpose == "transport" {
+		// A selected older upload may be inspected by a later run. Preserve the
+		// complete chain and inventory; successors are not predecessors of this
+		// inert transfer and retain their pending status in current-run recovery.
+		predecessors := pending[:0]
+		for _, item := range pending {
+			prior := item["run"].(Object)
+			created, selectedCreated := prior["created_at"].(string), run["created_at"].(string)
+			if created < selectedCreated || (created == selectedCreated && mustPositive(prior["id"]) <= invocation.RunID) {
+				predecessors = append(predecessors, item)
+			}
+		}
+		pending = predecessors
+	}
 	var runContext Object
 	if _, err := os.Lstat(filepath.Join(root, "run-context.json")); err == nil {
 		runContext, err = e.invocationContext(root, invocation)

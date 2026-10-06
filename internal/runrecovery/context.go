@@ -623,6 +623,9 @@ func (e *Engine) MarkContextPlan(root, name, status string) (Object, error) {
 			return nil, err
 		}
 		entry["status"], context["phase"] = "dispatching", "dispatching"
+		if err := e.ValidateRecoveryPlan(context, entry, plan, root); err != nil {
+			return nil, err
+		}
 	} else {
 		if prior != "dispatching" && prior != "completed" {
 			return nil, recoveryError("only a dispatched plan may become completed")
