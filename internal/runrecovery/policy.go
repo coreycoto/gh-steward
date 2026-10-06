@@ -780,6 +780,9 @@ func (e *Engine) validateRecoveryPlanWithReader(context, entry, plan Object, rea
 	case "merge":
 		return e.validateMerge(context, entry, plan, reader, policy)
 	case "execution":
+		if policy.attemptTarget == "plan_set" {
+			return e.validatePlanSetDispatch(context, entry, plan, reader, policy)
+		}
 		return e.validateExecution(context, entry, plan, reader, policy)
 	case "quarter":
 		return e.validatePlanSetDispatch(context, entry, plan, reader, policy)

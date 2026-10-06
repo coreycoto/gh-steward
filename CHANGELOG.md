@@ -1,7 +1,10 @@
 # Changelog
 
-## 0.4.1 — Unreleased
+## 0.4.1 — 2026-10-06
 
+- Validate manually reviewed execution plan sets through their exact dispatch approval contract. Preserve the original approval across interruptions and keep legacy execution-event validation unchanged.
+- Require the exact saved review before a prepared plan set enters dispatch; rejected transitions preserve the prepared context without creating a journal.
+- Permit inert transport of an exact earlier workflow upload without treating newer runs as predecessors. Keep complete-history checks, earlier holds, source-attempt freshness, and apply authorization unchanged.
 - Require explicit default-branch closing references before a merged pull request completes an open issue. Reference-only and stacked merges preserve its issue state and Project membership and status; an authoritatively closed issue keeps its done status.
 - Reject obsolete inferred-completion plans before reopening their retained journals or making provider calls. Preserve existing plan, receipt and unknown-write safeguards.
 
