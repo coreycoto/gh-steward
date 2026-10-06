@@ -23,6 +23,9 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 		return errors.New("runs requires an action")
 	}
 	action := args[0]
+	if action == "promotion-preview" || action == "promotion-validate" {
+		return r.runHistoryPromotion(ctx, args)
+	}
 	if action == "cutover-preview" || action == "cutover-validate" {
 		return r.runHistoryCutover(ctx, args)
 	}
@@ -203,6 +206,8 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 			inputName = "legacy-checkpoint"
 			if len(inputs) == 1 && strings.HasPrefix(inputs[0], "history-cutover=") {
 				inputName = "history-cutover"
+			} else if len(inputs) == 1 && strings.HasPrefix(inputs[0], "history-promotion=") {
+				inputName = "history-promotion"
 			}
 			value, inputErr := r.recoveryDocument(checkout, inputs, inputName)
 			if inputErr != nil {
@@ -212,6 +217,12 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 			input, ok = value.(contract.Object)
 			if !ok {
 				return errors.New("recovery input must be a raw JSON object")
+			}
+			if inputName == "history-promotion" {
+				input, inputErr = unwrapHistoryPromotion(input, repository)
+				if inputErr != nil {
+					return inputErr
+				}
 			}
 			if inputName == "history-cutover" {
 				input, inputErr = unwrapHistoryCutover(input, repository)
@@ -226,7 +237,7 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 		// merely by pinning a reviewed boundary. Reads still use the trusted
 		// checkout policy and the native selected-repository transport.
 		var cutoverReviewError error
-		if engine.HistoryCutoverReviewIssues()[*workflow] != nil && !strings.HasPrefix(action, "context-") {
+		if engine.HistoryCutoverReviewIssues()[*workflow] != nil && (!strings.HasPrefix(action, "context-") || engine.HistoryPromotionReviewIssues()[*workflow] != nil) {
 			if reader == nil {
 				transport, transportErr := native.New(checkout, repository)
 				if transportErr != nil {
@@ -241,12 +252,29 @@ func (r Runner) runRecovery(ctx context.Context, args []string) error {
 				cutoverReviewError = err
 			}
 		}
+		if engine.HistoryPromotionReviewIssues()[*workflow] != nil {
+			if reader == nil {
+				transport, transportErr := native.New(checkout, repository)
+				if transportErr != nil {
+					return transportErr
+				}
+				reader = runrecovery.NativeActionsReader{Transport: transport}
+			}
+			if reviewErr := resolveHistoryPromotionReviews(ctx, reader, engine, repository, *workflow); reviewErr != nil {
+				if action != "recover" {
+					return reviewErr
+				}
+				cutoverReviewError = reviewErr
+			}
+		}
 		switch action {
 		case "recover":
 			if cutoverReviewError != nil {
 				data, err = engine.HoldRecovery(invocation, "history cutover review could not be verified: "+cutoverReviewError.Error())
 			} else if input == nil {
 				data, err = engine.Recover(ctx, reader, invocation)
+			} else if inputName == "history-promotion" {
+				data, err = engine.RecoverWithHistoryPromotion(ctx, reader, invocation, input)
 			} else if inputName == "history-cutover" {
 				data, err = engine.RecoverWithHistoryCutover(ctx, reader, invocation, input)
 			} else {

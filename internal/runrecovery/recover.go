@@ -56,6 +56,12 @@ func (e *Engine) inspectHistoricalPackage(ctx context.Context, reader ActionsRea
 	if err := ExtractPackageArchive(payload, extracted); err != nil {
 		return nil, err
 	}
+	if e.activePromotions[invocation.Workflow] != nil {
+		promotion, err := e.promotionAtRoot(extracted, invocation.Workflow)
+		if err != nil || promotion == nil {
+			return nil, errors.New("promoted native source lost its exact promotion lineage")
+		}
+	}
 	runID, err := positiveInteger(run["id"], "historical run ID")
 	if err != nil {
 		return nil, err
@@ -132,6 +138,15 @@ func checkpointCandidatesFromChain(ctx context.Context, reader ActionsReader, e 
 		return nil, err
 	}
 	known := map[string]Object{}
+	if exactInt(base["schema_version"], historyPromotionSettlementSchemaVersion) {
+		promotion := base["history_promotion"].(Object)
+		preview := promotion["preview_checkpoint"].(Object)
+		for _, raw := range preview["settlements"].([]any) {
+			record := raw.(Object)
+			id, attempt := mustPositive(record["run_id"]), mustPositive(record["attempt"])
+			known[CheckpointArtifactName(target, id, attempt)] = Object{"run_id": id, "attempt": attempt}
+		}
+	}
 	for _, item := range pending {
 		run, err := object(item["run"], "historical attempt run")
 		if err != nil {
@@ -396,9 +411,12 @@ func (e *Engine) recoverWithLegacyCheckpoint(ctx context.Context, reader Actions
 	return e.recoverWithCheckpoints(ctx, reader, invocation, imported, nil)
 }
 
-func (e *Engine) recoverWithCheckpoints(ctx context.Context, reader ActionsReader, invocation Invocation, imported, historyCutover Object) (Object, error) {
+func (e *Engine) recoverWithCheckpoints(ctx context.Context, reader ActionsReader, invocation Invocation, imported, historyCutover Object, promotions ...Object) (Object, error) {
 	if imported != nil && historyCutover != nil {
 		return nil, recoveryError("legacy imports and history cutovers cannot be combined")
+	}
+	if len(promotions) > 1 || (len(promotions) != 0 && (imported != nil || historyCutover != nil)) {
+		return nil, recoveryError("promotion cannot be mixed with another explicit recovery boundary")
 	}
 	if !nonemptyString(invocation.RunName) || !nonemptyString(invocation.RecoveryKey) {
 		return nil, errors.New("current workflow run title and semantic recovery key are required")
@@ -417,6 +435,14 @@ func (e *Engine) recoverWithCheckpoints(ctx context.Context, reader ActionsReade
 	allArtifacts, err := CompleteRepositoryArtifacts(ctx, reader, e.repository)
 	if err != nil {
 		return hold(err)
+	}
+	var reviewedPromotion Object
+	if len(promotions) == 1 {
+		reviewedPromotion, err = e.ValidateReviewedHistoryPromotion(promotions[0], target)
+		if err != nil {
+			return hold(err)
+		}
+		historyCutover = reviewedPromotion["preview_checkpoint"].(Object)["history_cutover"].(Object)
 	}
 	var reviewedCutover Object
 	if historyCutover != nil {
@@ -438,6 +464,9 @@ func (e *Engine) recoverWithCheckpoints(ctx context.Context, reader ActionsReade
 	var cutoverSeed Object
 	if reviewedCutover != nil {
 		cutoverSeed, err = HistoryCutoverChain(target, reviewedCutover)
+		if reviewedPromotion != nil {
+			cutoverSeed, err = historyPromotionChain(reviewedPromotion)
+		}
 		if err != nil {
 			return hold(err)
 		}
@@ -471,13 +500,19 @@ func (e *Engine) recoverWithCheckpoints(ctx context.Context, reader ActionsReade
 		return hold(err)
 	}
 	if chain == nil {
+		if e.workflows[invocation.Workflow].historyPromotionReviewIssue != nil {
+			return hold(recoveryError("opted-in promotion workflow has no reviewed quarantine lineage"))
+		}
 		chain, err = EmptyChain(target)
 		if err != nil {
 			return hold(err)
 		}
 	}
-	if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
-		baseline, err := e.ValidateReviewedHistoryCutover(chain["history_cutover"], target)
+	if e.workflows[invocation.Workflow].historyPromotionReviewIssue != nil && !isHistoryCutoverChain(chain) {
+		return hold(recoveryError("opted-in promotion workflow lost its quarantined lineage"))
+	}
+	if isHistoryCutoverChain(chain) {
+		baseline, err := e.ValidateReviewedHistoryCutover(mustHistoryCutoverFromChain(chain), target)
 		if err != nil {
 			return hold(err)
 		}
@@ -508,8 +543,17 @@ func (e *Engine) recoverWithCheckpoints(ctx context.Context, reader ActionsReade
 			return hold(err)
 		}
 		if len(pending) == 0 {
-			if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) && invocation.Attempt > 1 && !nativeSettlementCoversAttempt(chain, invocation.RunID, invocation.Attempt-1) {
+			if isHistoryCutoverChain(chain) && invocation.Attempt > 1 && !nativeSettlementCoversAttempt(chain, invocation.RunID, invocation.Attempt-1) {
 				return hold(recoveryError("the preceding attempt is quarantined by the history cutover and has no native settlement"))
+			}
+			if exactInt(chain["schema_version"], historyPromotionSettlementSchemaVersion) && invocation.Attempt == 1 {
+				promotion := chain["history_promotion"].(Object)
+				prefix := promotion["preview_checkpoint"].(Object)["settlements"].([]any)
+				if len(chain["settlements"].([]any)) == len(prefix) {
+					if err := e.recheckPromotionState(ctx, reader, promotion); err != nil {
+						return hold(err)
+					}
+				}
 			}
 			if err := persistPackageJSON(root, "settlement-chain.json", chain); err != nil {
 				return nil, err
@@ -533,6 +577,9 @@ func (e *Engine) recoverWithCheckpoints(ctx context.Context, reader ActionsReade
 			}
 			if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
 				return Object{"outcome": "fresh", "mode": historyCutoverScope, "reason": "pre-cutover attempts remain unknown and quarantined; no new unsettled attempt was found", "artifact_name": artifactName}, nil
+			}
+			if exactInt(chain["schema_version"], historyPromotionSettlementSchemaVersion) {
+				return Object{"outcome": "fresh", "mode": "fresh-native", "promotion_sha256": chain["history_promotion"].(Object)["sha256"], "reason": "exact promotion admits only reviewed fresh native scope; old attempts remain quarantined", "artifact_name": artifactName}, nil
 			}
 			return Object{"outcome": "fresh", "reason": "all prior exact workflow attempts are positively settled", "artifact_name": artifactName}, nil
 		}

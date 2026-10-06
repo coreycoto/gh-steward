@@ -39,6 +39,9 @@ func (e *Engine) InitializeContext(root string, input Object) (Object, error) {
 	if _, err := e.workflowPolicy(fmt.Sprint(workflow)); err != nil {
 		return nil, err
 	}
+	if _, err := e.promotionAtRoot(root, fmt.Sprint(workflow)); err != nil {
+		return nil, err
+	}
 	if !strings.EqualFold(fmt.Sprint(repository), e.repository.Owner+"/"+e.repository.Name) {
 		return nil, recoveryError("new run context belongs to another repository")
 	}
@@ -1018,6 +1021,9 @@ func (e *Engine) readRunContext(root string) (Object, error) {
 	if err != nil {
 		return nil, err
 	}
+	if _, err := e.promotionAtRoot(root, fmt.Sprint(context["workflow_file"])); err != nil {
+		return nil, err
+	}
 	if err := e.validateRunContext(context); err != nil {
 		return nil, err
 	}
@@ -1035,6 +1041,9 @@ func (e *Engine) validateRunContext(context Object) error {
 	workflowPolicy, err := e.workflowPolicy(fmt.Sprint(context["workflow_file"]))
 	if err != nil {
 		return err
+	}
+	if e.activePromotions[fmt.Sprint(context["workflow_file"])] != nil && context["publication"] != nil {
+		return recoveryError("history promotion excludes publication contexts")
 	}
 	if !strings.EqualFold(fmt.Sprint(context["repository"]), e.repository.Owner+"/"+e.repository.Name) ||
 		!contextKeyPattern.MatchString(fmt.Sprint(context["recovery_key"])) || !nonemptyString(context["run_name"]) {
@@ -1067,6 +1076,9 @@ func (e *Engine) validateRunContext(context Object) error {
 	for _, raw := range plans {
 		entry, err := exactWithOptional(raw, runContextPlanRequiredFields, runContextPlanOptionalFields, "context plan entry")
 		if err != nil {
+			return err
+		}
+		if err := e.validatePromotionPlanScope(context, entry); err != nil {
 			return err
 		}
 		name, nameOK := entry["name"].(string)

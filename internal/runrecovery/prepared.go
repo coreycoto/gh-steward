@@ -824,9 +824,20 @@ func (e *Engine) validatePreparedSourceRecord(value any, target Object) (Object,
 
 func validatePreparedObservation(value any, invocation Invocation, target, run, chain Object) error {
 	fields := []string{"schema_version", "outcome", "target", "run", "run_id", "attempt", "recovery_key", "chain_sha256", "prepared_frontier_sha256"}
-	observation, err := Exact(value, fields, "prepared recovery observation")
+	observation, err := exactWithOptional(value, fields, []string{noopHistoryCutoverDigestField}, "prepared recovery observation")
 	if err != nil {
 		return err
+	}
+	var cutoverDigest any
+	if isHistoryCutoverChain(chain) {
+		baseline, err := historyCutoverFromChain(chain)
+		if err != nil {
+			return err
+		}
+		cutoverDigest = baseline["sha256"]
+	}
+	if !Equal(observation[noopHistoryCutoverDigestField], cutoverDigest) {
+		return errors.New("prepared recovery observation lost its quarantined history identity")
 	}
 	settled, err := settlementPrefixDigest(chain["settlements"])
 	if err != nil {
@@ -1266,11 +1277,11 @@ func (e *Engine) validateJournaledPreparedSource(source Object, target Object) e
 	return e.validateRetainedPlanPolicyFiles(context, retained, policyFiles)
 }
 
-func allUnsettledAttempts(observed []Object, latest map[int64]int64, covered map[int64]Object) []Object {
+func allUnsettledAttempts(observed []Object, latest map[int64]int64, covered map[int64]Object, quarantined map[int64]int64) []Object {
 	rows := []Object{}
 	for _, run := range observed {
 		id := mustPositive(run["id"])
-		first := int64(1)
+		first := quarantined[id] + 1
 		if item := covered[id]; item != nil {
 			first = mustPositive(item["settled_attempt"]) + 1
 		}
@@ -1292,7 +1303,7 @@ func allUnsettledAttempts(observed []Object, latest map[int64]int64, covered map
 	return rows
 }
 
-func (e *Engine) validatePreparedFrontier(chain Object, target Object, observed []Object, latest map[int64]int64, covered map[int64]Object, recordsByRun map[int64][]int64) error {
+func (e *Engine) validatePreparedFrontier(chain Object, target Object, observed []Object, latest map[int64]int64, covered map[int64]Object, recordsByRun map[int64][]int64, quarantined map[int64]int64) error {
 	frontier, _ := array(chain["prepared_frontier"], "prepared source frontier")
 	proofs, _ := array(chain["prepared_terminal_proofs"], "prepared terminal proof inventory")
 	ordered, err := validatePreparedSourceLineage(frontier)
@@ -1316,11 +1327,11 @@ func (e *Engine) validatePreparedFrontier(chain Object, target Object, observed 
 		if err != nil {
 			return err
 		}
-		all := allUnsettledAttempts(observed, latest, covered)
+		all := allUnsettledAttempts(observed, latest, covered, quarantined)
 		if index >= len(all) || !exactInt(all[index]["run_id"], runID) || !exactInt(all[index]["attempt"], attempt) {
 			return errors.New("prepared frontier skips or changes an earlier unsettled attempt")
 		}
-		if int64(len(recordsByRun[runID])) >= attempt {
+		if int64(len(recordsByRun[runID]))+quarantined[runID] >= attempt {
 			return errors.New("prepared frontier repeats an already settled attempt")
 		}
 	}

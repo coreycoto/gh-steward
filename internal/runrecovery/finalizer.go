@@ -68,6 +68,9 @@ func (e *Engine) invocationHistory(ctx context.Context, reader ActionsReader, in
 }
 
 func (e *Engine) invocationContext(root string, invocation Invocation) (Object, error) {
+	if _, err := e.promotionAtRoot(root, invocation.Workflow); err != nil {
+		return nil, err
+	}
 	data, err := ReadPackageFile(root, "run-context.json")
 	if err != nil {
 		return nil, err

@@ -700,23 +700,45 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 	fields := chainFields
 	if version == historyCutoverSettlementSchemaVersion {
 		fields = cutoverChainFields
+	} else if version == historyPromotionSettlementSchemaVersion {
+		fields = promotionChainFields
 	}
 	chain, err := Exact(rawChain, fields, "settlement checkpoint")
 	if err != nil {
 		return nil, err
 	}
-	if versionErr != nil || (version != settlementSchemaVersion && version != legacySettlementSchemaVersion && version != historyCutoverSettlementSchemaVersion) || !Equal(chain["target"], target) {
+	if versionErr != nil || (version != settlementSchemaVersion && version != legacySettlementSchemaVersion && version != historyCutoverSettlementSchemaVersion && version != historyPromotionSettlementSchemaVersion) || !Equal(chain["target"], target) {
 		return nil, recoveryError("settlement checkpoint is for another repository or workflow target")
 	}
 	cutoverHighwaters := map[int64]int64{}
-	if version == historyCutoverSettlementSchemaVersion {
-		baseline, err := e.ValidateReviewedHistoryCutover(chain["history_cutover"], target)
+	if isHistoryCutoverChain(chain) {
+		baselineValue, err := historyCutoverFromChain(chain)
+		if err != nil {
+			return nil, err
+		}
+		baseline, err := e.ValidateReviewedHistoryCutover(baselineValue, target)
 		if err != nil {
 			return nil, err
 		}
 		cutoverHighwaters, err = validateHistoryCutoverPrefix(baseline, observed, observedAttempts)
 		if err != nil {
 			return nil, err
+		}
+	}
+	if version == historyPromotionSettlementSchemaVersion {
+		promotion, err := e.ValidateReviewedHistoryPromotion(chain["history_promotion"], target)
+		if err != nil {
+			return nil, err
+		}
+		prefix := promotion["preview_checkpoint"].(Object)["settlements"].([]any)
+		rows, err := array(chain["settlements"], "promoted settlements")
+		if err != nil || len(rows) < len(prefix) {
+			return nil, recoveryError("promoted checkpoint lost its reviewed preview prefix")
+		}
+		for i := range prefix {
+			if !Equal(rows[i], prefix[i]) {
+				return nil, recoveryError("promoted checkpoint changed its reviewed preview prefix")
+			}
 		}
 	}
 	inventoryRows, err := array(chain["inventory"], "checkpoint inventory")
@@ -810,8 +832,8 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 			return nil, recoveryError("settlement checkpoint has a repeated, missing or out-of-order attempt record")
 		}
 		var noopHistoryDigest []string
-		if version == historyCutoverSettlementSchemaVersion {
-			baseline, _ := object(chain["history_cutover"], "history cutover baseline")
+		if isHistoryCutoverChain(chain) {
+			baseline, _ := historyCutoverFromChain(chain)
 			noopHistoryDigest = []string{fmt.Sprint(baseline["sha256"])}
 		}
 		if err := validateNoopFrontier(record, settledPrefix, noopHistoryDigest...); err != nil {
@@ -852,7 +874,7 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 			return nil, recoveryError("latest attempt inventory contains a run absent from complete history")
 		}
 	}
-	if err := e.validatePreparedFrontier(chain, target, observed, observedAttempts, coveredByID, recordsByRun); err != nil {
+	if err := e.validatePreparedFrontier(chain, target, observed, observedAttempts, coveredByID, recordsByRun, cutoverHighwaters); err != nil {
 		return nil, err
 	}
 	return chain, nil
@@ -969,32 +991,50 @@ func (e *Engine) SelectCheckpoint(candidates []Object, target any, observed []Ob
 		return nil, nil
 	}
 	valid := make([]Object, 0, len(candidates))
-	cutoverDigest := ""
+	cutoverDigest, promotionDigest := "", ""
 	hasCutover := false
+	var promotion Object
 	for _, candidate := range candidates {
 		checked, err := e.ValidateChain(candidate, target, observed, attempts)
 		if err != nil {
 			return nil, err
 		}
-		if exactInt(checked["schema_version"], historyCutoverSettlementSchemaVersion) {
-			baseline, err := ValidateHistoryCutover(checked["history_cutover"])
+		if isHistoryCutoverChain(checked) {
+			baseline, err := historyCutoverFromChain(checked)
 			if err != nil {
 				return nil, err
 			}
 			digest := fmt.Sprint(baseline["sha256"])
 			if hasCutover && digest != cutoverDigest {
-				return nil, recoveryError("available schema-6 checkpoints contain different reviewed history cutovers")
+				return nil, recoveryError("available checkpoints contain different reviewed history cutovers")
 			}
 			hasCutover, cutoverDigest = true, digest
-		} else if hasCutover {
-			return nil, recoveryError("schema-6 and pre-cutover checkpoints form incompatible histories")
+			if exactInt(checked["schema_version"], historyPromotionSettlementSchemaVersion) {
+				p := checked["history_promotion"].(Object)
+				if promotionDigest != "" && promotionDigest != p["sha256"] {
+					return nil, recoveryError("available checkpoints contain different promotion grants")
+				}
+				promotion, promotionDigest = p, fmt.Sprint(p["sha256"])
+			}
 		}
 		valid = append(valid, checked)
 	}
 	if hasCutover {
 		for _, chain := range valid {
-			if !exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
-				return nil, recoveryError("schema-6 and pre-cutover checkpoints form incompatible histories")
+			if !isHistoryCutoverChain(chain) {
+				return nil, recoveryError("cutover and pre-cutover checkpoints form incompatible histories")
+			}
+			if promotion != nil && exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
+				prefix := promotion["preview_checkpoint"].(Object)["settlements"].([]any)
+				rows := chain["settlements"].([]any)
+				if len(rows) > len(prefix) {
+					return nil, recoveryError("later preview checkpoint is outside the exact promotion boundary")
+				}
+				for i := range rows {
+					if !Equal(rows[i], prefix[i]) {
+						return nil, recoveryError("preview checkpoint differs from the promoted lineage")
+					}
+				}
 			}
 		}
 	}
@@ -1004,7 +1044,7 @@ func (e *Engine) SelectCheckpoint(candidates []Object, target any, observed []Ob
 		rows := chain["settlements"].([]any)
 		frontier := chain["prepared_frontier"].([]any)
 		longestFrontier := longest["prepared_frontier"].([]any)
-		if len(rows) > len(longestSettlements) || (len(rows) == len(longestSettlements) && len(frontier) > len(longestFrontier)) {
+		if len(rows) > len(longestSettlements) || (len(rows) == len(longestSettlements) && (len(frontier) > len(longestFrontier) || (len(frontier) == len(longestFrontier) && exactInt(chain["schema_version"], historyPromotionSettlementSchemaVersion)))) {
 			longest, longestSettlements = chain, rows
 		}
 	}
@@ -1073,8 +1113,8 @@ func PendingAttempts(chainValue Object, observed []Object, latest map[int64]int6
 	}
 	covered := map[int64]int64{}
 	baselineHighwaters := map[int64]int64{}
-	if exactInt(chainValue["schema_version"], historyCutoverSettlementSchemaVersion) {
-		baseline, err := ValidateHistoryCutover(chainValue["history_cutover"])
+	if isHistoryCutoverChain(chainValue) {
+		baseline, err := historyCutoverFromChain(chainValue)
 		if err != nil {
 			return nil, err
 		}
@@ -1229,8 +1269,8 @@ func (e *Engine) AppendSettlement(chainValue Object, target any, observed []Obje
 		return nil, recoveryError("only the earliest unsettled prior attempt or the fully-preceded current attempt may advance the checkpoint")
 	}
 	var noopHistoryDigest []string
-	if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
-		baseline, _ := object(chain["history_cutover"], "history cutover baseline")
+	if isHistoryCutoverChain(chain) {
+		baseline, _ := historyCutoverFromChain(chain)
 		noopHistoryDigest = []string{fmt.Sprint(baseline["sha256"])}
 	}
 	if err := validateNoopFrontier(record, chain["settlements"].([]any), noopHistoryDigest...); err != nil {
@@ -1272,8 +1312,8 @@ func (e *Engine) AppendSettlement(chainValue Object, target any, observed []Obje
 	}
 	if item == nil {
 		frontier := int64(0)
-		if exactInt(result["schema_version"], historyCutoverSettlementSchemaVersion) {
-			baseline, err := ValidateHistoryCutover(result["history_cutover"])
+		if isHistoryCutoverChain(result) {
+			baseline, err := historyCutoverFromChain(result)
 			if err != nil {
 				return nil, err
 			}

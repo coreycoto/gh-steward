@@ -873,7 +873,14 @@ gh steward runs cutover-validate --input baseline=FILE [--out PRIVATE_FILE]
   A cutover requires an exact trusted policy digest or configured review issue
   with a current trusted maintainer's exact approval. All future attempts remain
   subject to strict native proof; schema-6 cutovers are preview-only.
-gh steward runs recover --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH [--input legacy-checkpoint=FILE | --input history-cutover=FILE]
+gh steward runs promotion-preview --workflow FILE --input baseline=FILE --plan NAME --state-read SAME_REPO_ENDPOINT --out PRIVATE_FILE [--checkpoint-artifact-id ID --checkpoint-artifact-digest sha256:DIGEST]
+gh steward runs promotion-validate --input promotion=FILE [--out PRIVATE_FILE]
+  Promotion capture is read-only and requires an idle, fully covered preview
+  lineage and a configured independent promotion review issue. Its exact review
+  admits only selected fresh native plans, preserving unknown history. Policy
+  drift or revocation holds work. Publication remains excluded. Validation does
+  not approve or activate; context actions recheck reviews for opted-in workflows.
+gh steward runs recover --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH [--input legacy-checkpoint=FILE | --input history-cutover=FILE | --input history-promotion=FILE]
 gh steward runs qualify-prepared --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA
 gh steward runs acquire-handoff --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --artifact-id ID --artifact-digest sha256:DIGEST [--purpose apply|transport]
 gh steward runs verify-publication --workflow FILE --run-id ID --attempt N --run-name TITLE --recovery-key KEY --package-root PATH --workflow-sha CONTROL_SHA

@@ -1,6 +1,6 @@
 ---
 name: gh-steward-workflow-recovery
-description: Integrate or diagnose gh-steward recovery across GitHub Actions attempts and isolated jobs, including exact handoffs, durable checkpoints, reviewed legacy imports, and preview-only cutovers that quarantine unknown history.
+description: Integrate or diagnose gh-steward recovery across GitHub Actions attempts and isolated jobs, including exact handoffs, durable checkpoints, reviewed legacy imports, quarantined history and separately reviewed fresh-native promotion.
 ---
 
 Use the native `gh steward runs` commands for shared recovery mechanics. Keep consumer-specific approval, event, and domain policy in the trusted checkout; keep shell adapters thin. Read [the protocol reference](references/run-protocol.md) when implementing a workflow or interpreting a held package.
@@ -39,3 +39,5 @@ The legacy review and import commands require CLI 0.3.0 or later.
 Use the [history cutover reference](references/history-cutover.md) when original legacy evidence is unavailable. CLI 0.4.0 captures a complete terminal history, keeps every old attempt explicitly unknown and quarantined, and requires review of that exact baseline. Capture is read-only; offline validation checks shape and digest only. Keep publication, installation, consumer promotion and baseline activation as separate delivery decisions when the task reserves them.
 
 A baseline must never absorb uncaptured later attempts or be changed to clear a hold. Schema-6 recovery is preview-only and blocks executable plan registration, mutation resumption and publication. Every future native attempt still needs its own qualified evidence. Preserve the same reviewed baseline in all checkpoints. A configured GitHub issue can record review independently of source commits; authenticated authorship is not proof of human consent, so obtain the user's approval for the exact baseline before recording an approval statement on their behalf.
+
+For a separately authorized transition to fresh native work, use the [promotion reference](references/history-promotion.md). This source capability is unreleased and is absent from CLI 0.4.1. Capture the idle exact preview lineage, unchanged trusted policy, selected future plan names and explicit live reconciliation reads. Obtain human approval for the exact promotion before recording its independent review. Schema 7 retains that same grant and quarantine through native interruptions and receipts; `fresh` with `mode: fresh-native` permits only the selected native scope and the normal per-plan review. It never approves historical replay, historical settlement, publication or broader workflow permissions. Review failures, revocation, policy drift and lost lineage hold work.

@@ -77,7 +77,9 @@ permission are checked on each provider-backed recovery command. Deleted or
 edited statements and lost write access remove their current approval. One
 reviewer's revocation removes their approval; other configured reviewers' current
 approvals remain independent. Closing the issue does not revoke its statements.
-Provider read failures fail closed. Context commands remain provider-free.
+Provider read failures fail closed. Context commands remain provider-free unless
+the workflow opts into the separate promotion review channel; those commands
+then recheck both applicable review channels before native context changes.
 
 GitHub authentication establishes who authored a comment, not whether a human
 approved it. An agent must obtain approval of the exact baseline before recording
@@ -112,8 +114,9 @@ only. It does not mean the quarantined historical attempts were settled.
 Read-only planning may retain inert proposals. Current-run `finish-noop` still
 needs positive native skipped-mutator evidence and creates a real receipt for
 that current run. The chain cannot register executable plans, install journals
-for mutation resumption, acquire an apply handoff or promote publication. This
-version does not include promotion from preview-only to mutating recovery.
+for mutation resumption, acquire an apply handoff or promote publication. Use
+the separately reviewed [promotion protocol](history-promotion.md) for selected
+fresh native work; a baseline review cannot authorize that transition.
 Default recovery without an approved baseline keeps its existing strict behavior.
 
 Keep failed reports in separate diagnostic artifacts before the guard stops the
