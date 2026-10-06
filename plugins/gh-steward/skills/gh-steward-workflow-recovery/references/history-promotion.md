@@ -61,6 +61,10 @@ kinds, selected raw `state_reads`, fixed exclusions and a canonical `sha256`.
 Both the promotion and resulting checkpoint must fit the 8 MiB artifact bound.
 Offline validation checks shape and digest, not approval or live freshness.
 
+The preview checkpoint may contain a [compressed large-history baseline](history-archive.md).
+Promotion keeps its complete sealed document and reviewed digest. It does not
+replace that digest with the inner evidence digest or drop raw records to fit.
+
 ## Independent review
 
 Present the exact promotion, selected work and exclusions to the user. GitHub

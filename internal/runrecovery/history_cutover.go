@@ -38,6 +38,10 @@ func CaptureHistoryCutover(ctx context.Context, reader ActionsReader, repository
 	if err != nil {
 		return nil, fmt.Errorf("read exact workflow identity: %w", err)
 	}
+	budget := &historyEvidenceBudget{}
+	if err := budget.take(workflowObject); err != nil {
+		return nil, err
+	}
 	workflowID, err := contract.PositiveInteger(workflowObject["id"])
 	if err != nil || workflowObject["path"] != ".github/workflows/"+workflow {
 		return nil, errors.New("workflow read does not identify the exact requested workflow")
@@ -53,7 +57,7 @@ func CaptureHistoryCutover(ctx context.Context, reader ActionsReader, repository
 	if len(runRows) > maxHistoryRuns {
 		return nil, recoveryError("history cutover workflow run inventory exceeds its explicit bound")
 	}
-	runRows, attempts, err := historyCutoverRuns(ctx, reader, repository, runRows, target)
+	runRows, attempts, err := historyCutoverRuns(ctx, reader, repository, runRows, target, budget)
 	if err != nil {
 		return nil, err
 	}
@@ -62,13 +66,16 @@ func CaptureHistoryCutover(ctx context.Context, reader ActionsReader, repository
 		return nil, fmt.Errorf("read complete repository artifact inventory: %w", err)
 	}
 	for _, artifact := range artifactRows {
+		if err := budget.take(artifact); err != nil {
+			return nil, err
+		}
 		name, _ := artifact["name"].(string)
 		if strings.HasPrefix(name, recoveryArtifactPrefix(target)) {
 			return nil, errors.New("history cutover cannot replace existing native recovery packages or checkpoints")
 		}
 	}
 	artifactRows = sortArtifactRows(artifactRows)
-	state, err := captureHistoryCutoverState(ctx, reader, repository, stateReads)
+	state, err := captureHistoryCutoverState(ctx, reader, repository, stateReads, budget)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +99,14 @@ func CaptureHistoryCutover(ctx context.Context, reader ActionsReader, repository
 // ValidateHistoryCutover validates a raw cutover baseline without provider
 // access. Its digest is an artifact identity, not user authorization.
 func ValidateHistoryCutover(value any) (Object, error) {
+	if candidate, ok := value.(Object); ok && exactInt(candidate["schema_version"], 2) {
+		document, _, err := decodeHistoryArchive(value)
+		return document, err
+	}
+	return validateHistoryCutoverRaw(value, MaxCheckpointBytes)
+}
+
+func validateHistoryCutoverRaw(value any, maxBytes int) (Object, error) {
 	baseline, err := Exact(value, historyCutoverFields, "history cutover baseline")
 	if err != nil {
 		return nil, err
@@ -159,8 +174,8 @@ func ValidateHistoryCutover(value any) (Object, error) {
 		return nil, recoveryError("history cutover digest is invalid")
 	}
 	full, err := Canonical(baseline)
-	if err != nil || len(full) > MaxCheckpointBytes {
-		return nil, recoveryError("history cutover baseline exceeds the 8 MiB safety bound")
+	if err != nil || len(full) > maxBytes {
+		return nil, recoveryError("history cutover baseline exceeds its explicit byte bound")
 	}
 	return baseline, nil
 }
@@ -174,6 +189,10 @@ func HistoryCutoverDigest(value any) (string, error) {
 }
 
 func validateHistoryCutoverPrefix(baseline Object, observed []Object, latest map[int64]int64) (map[int64]int64, error) {
+	baseline, err := HistoryCutoverEvidence(baseline)
+	if err != nil {
+		return nil, err
+	}
 	if len(observed) > maxHistoryRuns || len(latest) != len(observed) {
 		return nil, recoveryError("complete current history is incomplete for the reviewed history cutover")
 	}
@@ -226,20 +245,37 @@ func sealHistoryCutover(value Object) (Object, error) {
 		unsigned[field] = entry
 	}
 	canonical, err := Canonical(unsigned)
-	if err != nil || len(canonical) > MaxCheckpointBytes {
-		return nil, recoveryError("history cutover baseline exceeds the 8 MiB safety bound")
+	if err != nil || len(canonical) > MaxHistoryEvidenceBytes {
+		return nil, recoveryError("history cutover baseline exceeds its 64 MiB archival evidence bound")
 	}
 	sealed := Object{}
 	for key, entry := range unsigned {
 		sealed[key] = entry
 	}
 	sealed["sha256"] = SHA256(canonical)
+	full, err := Canonical(sealed)
+	if err != nil {
+		return nil, err
+	}
+	if len(full) > historyRawCaptureLimit {
+		if _, err := validateHistoryCutoverRaw(sealed, MaxHistoryEvidenceBytes); err != nil {
+			return nil, err
+		}
+		archive, err := encodeHistoryArchive(sealed)
+		if err != nil {
+			return nil, err
+		}
+		return ValidateHistoryCutover(archive)
+	}
 	return ValidateHistoryCutover(sealed)
 }
 
-func historyCutoverRuns(ctx context.Context, reader ActionsReader, repository contract.Repository, rows []Object, target Object) ([]Object, []Object, error) {
+func historyCutoverRuns(ctx context.Context, reader ActionsReader, repository contract.Repository, rows []Object, target Object, budget *historyEvidenceBudget) ([]Object, []Object, error) {
 	copyRows := make([]Object, len(rows))
 	for index, row := range rows {
+		if err := budget.take(row); err != nil {
+			return nil, nil, err
+		}
 		identity, err := NormalizeRun(row)
 		if err != nil || !Equal(identity["workflow_id"], target["workflow_id"]) || row["status"] != "completed" || !nonemptyString(row["conclusion"]) {
 			return nil, nil, recoveryError("history cutover requires complete terminal workflow runs with exact nonempty conclusions")
@@ -271,6 +307,9 @@ func historyCutoverRuns(ctx context.Context, reader ActionsReader, repository co
 			if err != nil {
 				return nil, nil, fmt.Errorf("read exact workflow attempt %d/%d: %w", runID, attempt, err)
 			}
+			if err := budget.take(response); err != nil {
+				return nil, nil, err
+			}
 			created, err := validateHistoryCutoverAttemptRead(response, identity, runID, attempt, previousAttemptCreated)
 			if err != nil {
 				return nil, nil, err
@@ -289,7 +328,13 @@ func historyCutoverRuns(ctx context.Context, reader ActionsReader, repository co
 	return copyRows, attempts, nil
 }
 
-func captureHistoryCutoverState(ctx context.Context, reader ActionsReader, repository contract.Repository, endpoints []string) ([]Object, error) {
+func captureHistoryCutoverState(ctx context.Context, reader ActionsReader, repository contract.Repository, endpoints []string, budgets ...*historyEvidenceBudget) ([]Object, error) {
+	budget := &historyEvidenceBudget{}
+	if len(budgets) == 1 {
+		budget = budgets[0]
+	} else if len(budgets) > 1 {
+		return nil, recoveryError("one aggregate history evidence budget is required")
+	}
 	if len(endpoints) > 128 {
 		return nil, recoveryError("history cutover accepts at most 128 state reads")
 	}
@@ -304,6 +349,9 @@ func captureHistoryCutoverState(ctx context.Context, reader ActionsReader, repos
 		value, err := reader.Read(ctx, endpoint)
 		if err != nil {
 			return nil, fmt.Errorf("read requested issue or pull request %s: %w", endpoint, err)
+		}
+		if err := budget.take(value); err != nil {
+			return nil, err
 		}
 		cloned, err := cloneObject(value)
 		if err != nil {

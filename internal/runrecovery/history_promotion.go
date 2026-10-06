@@ -246,6 +246,10 @@ func (e *Engine) validatePromotionScopes(p Object, policy workflowPolicy) error 
 }
 
 func promotionCheckpointHistory(checkpoint, baseline Object) ([]Object, map[int64]int64, error) {
+	baseline, err := HistoryCutoverEvidence(baseline)
+	if err != nil {
+		return nil, nil, err
+	}
 	byID, attempts := map[int64]Object{}, map[int64]int64{}
 	rows, err := objectArray(baseline["run_inventory"], "promotion baseline runs")
 	if err != nil {

@@ -36,7 +36,12 @@ a canonical `sha256`. Every attempt explicitly has `outcome: "unknown"` and
 duplicated, foreign, oversized or incomplete evidence. It also rejects existing
 native recovery artifacts, preserving positive native lineage rather than
 absorbing it into an unknown baseline. The whole baseline must fit the 8 MiB
-checkpoint limit; the CLI never truncates it.
+checkpoint limit; the CLI never truncates it. This unreleased source also supports
+a [bounded compressed schema-2 archive](history-archive.md) for larger complete
+snapshots while retaining the same 8 MiB checkpoint/file limit. Capture selects
+the representation automatically. Existing schema-1 snapshots keep their
+identity and remain valid. A compressed baseline retains its own reviewed digest;
+its decompressed inner digest cannot substitute for that review identity.
 
 ## Independent exact review
 

@@ -314,3 +314,48 @@ func TestCutoverReviewRouteKeepsLocalContextCommandsProviderFree(t *testing.T) {
 		t.Fatal("local context unexpectedly required a provider approval read", err, stderr.String())
 	}
 }
+
+func TestCutoverCLIRoundTripsCompleteCompressedEvidenceWithinPrivateFileBound(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "")
+	root := checkout(t)
+	writeLegacyCLIJSON(t, root, "policy.json", cutoverCLIPolicy(false))
+	reader := emptyCutoverCLIReader()
+	runs := make([]any, 150)
+	payload := strings.Repeat("retained private provider payload; ", 1200)
+	for index := range runs {
+		run := contract.Object{"id": int64(index + 1), "run_attempt": int64(1), "created_at": "2026-01-01T00:00:00Z", "display_title": "Historical", "event": "workflow_dispatch", "workflow_id": int64(9), "head_branch": "main", "head_sha": strings.Repeat("a", 40), "status": "completed", "conclusion": "success", "raw_payload": payload}
+		runs[index] = run
+		reader.objects[fmt.Sprintf("repos/example/widgets/actions/runs/%d/attempts/1", index+1)] = run
+	}
+	reader.pages["repos/example/widgets/actions/workflows/task.yml/runs?per_page=100"] = []any{contract.Object{"total_count": int64(150), "workflow_runs": runs[:100]}, contract.Object{"total_count": int64(150), "workflow_runs": runs[100:]}}
+	reader.objects["repos/example/widgets/issues/18"] = contract.Object{"body": "private selected state"}
+	var stdout, stderr bytes.Buffer
+	err := (Runner{Out: &stdout, Err: &stderr, Actions: reader}).Run(context.Background(), []string{"runs", "cutover-preview", "--repo-root", root, "--workflow", "task.yml", "--policy", "policy.json", "--state-read", "repos/example/widgets/issues/18", "--out", "complete-baseline.json"})
+	if err != nil {
+		t.Fatal(err, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "retained private") || strings.Contains(stdout.String(), "private selected") || strings.Contains(stdout.String(), "state_reads") {
+		t.Fatal("compressed capture leaked provider bodies", stdout.String())
+	}
+	result, err := contract.Decode(bytes.NewReader(stdout.Bytes()))
+	data, _ := contract.ObjectAt(result, "data")
+	if err != nil || !runrecovery.Equal(data["evidence_schema"], int64(2)) || data["activation"] != "not-performed" || !runrecovery.Equal(data["inventory_counts"], contract.Object{"runs": 150, "attempts": 150, "artifacts": 0, "state": 1}) {
+		t.Fatal("compressed summary lost scope or complete counts", result, err)
+	}
+	info, err := os.Stat(filepath.Join(root, "complete-baseline.json"))
+	if err != nil || info.Size() > runrecovery.MaxFileBytes || info.Mode().Perm() != 0600 {
+		t.Fatal("compressed evidence did not fit private file contract", info, err)
+	}
+	pathWithGitOnly(t)
+	stdout.Reset()
+	stderr.Reset()
+	err = (Runner{Out: &stdout, Err: &stderr, Actions: forbiddenLegacyCLIProvider{t}}).Run(context.Background(), []string{"runs", "cutover-validate", "--repo-root", root, "--input", "baseline=complete-baseline.json"})
+	if err != nil {
+		t.Fatal("offline compressed validation required provider or lost evidence", err, stderr.String())
+	}
+	offline, err := contract.Decode(bytes.NewReader(stdout.Bytes()))
+	offlineData, _ := contract.ObjectAt(offline, "data")
+	if err != nil || !runrecovery.Equal(offlineData["inventory_counts"], data["inventory_counts"]) || offlineData["baseline_sha256"] != data["baseline_sha256"] || offlineData["validation"] != "shape-and-digest-only" || offlineData["activation"] != "not-performed" {
+		t.Fatal("offline validation changed review identity or claimed activation", offline, err)
+	}
+}
