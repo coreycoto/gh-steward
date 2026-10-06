@@ -25,7 +25,18 @@ type cutoverReviewDecision struct {
 // Authentication establishes authorship, not human authorization. Agents must
 // obtain approval for the exact baseline before recording this statement.
 func resolveHistoryCutoverReviews(ctx context.Context, reader runrecovery.ActionsReader, engine *runrecovery.Engine, repository contract.Repository, workflow string) error {
+	return resolveHistoryReview(ctx, reader, engine, repository, workflow, "CUTOVER")
+}
+
+func resolveHistoryPromotionReviews(ctx context.Context, reader runrecovery.ActionsReader, engine *runrecovery.Engine, repository contract.Repository, workflow string) error {
+	return resolveHistoryReview(ctx, reader, engine, repository, workflow, "PROMOTION")
+}
+
+func resolveHistoryReview(ctx context.Context, reader runrecovery.ActionsReader, engine *runrecovery.Engine, repository contract.Repository, workflow, kind string) error {
 	route := engine.HistoryCutoverReviewIssues()[workflow]
+	if kind == "PROMOTION" {
+		route = engine.HistoryPromotionReviewIssues()[workflow]
+	}
 	if route == nil {
 		return nil
 	}
@@ -33,6 +44,7 @@ func resolveHistoryCutoverReviews(ctx context.Context, reader runrecovery.Action
 	if err != nil {
 		return err
 	}
+	engine.ResetHistoryReviews(workflow, kind)
 	trusted := map[string]bool{}
 	logins, ok := route["trusted_logins"].([]any)
 	if !ok {
@@ -58,7 +70,7 @@ func resolveHistoryCutoverReviews(ctx context.Context, reader runrecovery.Action
 	if err != nil {
 		return fmt.Errorf("read complete history cutover review comments: %w", err)
 	}
-	decisions, err := cutoverReviewDecisions(pages, count, trusted, repository, number, workflow)
+	decisions, err := cutoverReviewDecisions(pages, count, trusted, repository, number, workflow, kind)
 	if err != nil {
 		return err
 	}
@@ -84,8 +96,14 @@ func resolveHistoryCutoverReviews(ctx context.Context, reader runrecovery.Action
 		}
 		switch permission["permission"] {
 		case "write", "maintain", "admin":
-			if err := engine.AdmitHistoryCutoverReview(workflow, decision.digest); err != nil {
-				return err
+			var admitErr error
+			if kind == "PROMOTION" {
+				admitErr = engine.AdmitHistoryPromotionReview(workflow, decision.digest)
+			} else {
+				admitErr = engine.AdmitHistoryCutoverReview(workflow, decision.digest)
+			}
+			if admitErr != nil {
+				return admitErr
 			}
 		case "read", "none", "triage":
 			// A prior statement loses authority when its author loses write access.
@@ -107,7 +125,17 @@ func validateCutoverReviewIssue(issue contract.Object, repository contract.Repos
 	return count, nil
 }
 
-func cutoverReviewDecisions(pages []any, expected int64, trusted map[string]bool, repository contract.Repository, issue int64, workflow string) ([]cutoverReviewDecision, error) {
+func cutoverReviewDecisions(pages []any, expected int64, trusted map[string]bool, repository contract.Repository, issue int64, workflow string, kinds ...string) ([]cutoverReviewDecision, error) {
+	kind := "CUTOVER"
+	if len(kinds) > 1 {
+		return nil, errors.New("one exact history review kind is required")
+	}
+	if len(kinds) == 1 {
+		kind = kinds[0]
+	}
+	if kind != "CUTOVER" && kind != "PROMOTION" {
+		return nil, errors.New("unsupported history review kind")
+	}
 	if len(pages) == 0 || len(pages) > maxCutoverReviewComments/100+1 {
 		return nil, errors.New("history cutover review comments require a complete bounded page inventory")
 	}
@@ -138,11 +166,11 @@ func cutoverReviewDecisions(pages []any, expected int64, trusted map[string]bool
 				continue
 			}
 			line := strings.TrimSpace(strings.SplitN(body, "\n", 2)[0])
-			if !strings.HasPrefix(line, "APPROVE HISTORY CUTOVER") && !strings.HasPrefix(line, "REVOKE HISTORY CUTOVER") {
+			if !strings.HasPrefix(line, "APPROVE HISTORY "+kind) && !strings.HasPrefix(line, "REVOKE HISTORY "+kind) {
 				continue
 			}
 			parts := strings.Fields(line)
-			if len(parts) != 6 || parts[1] != "HISTORY" || parts[2] != "CUTOVER" || (parts[0] != "APPROVE" && parts[0] != "REVOKE") || parts[3] != fmt.Sprintf("%s#%d", repository.FullName(), issue) || !runrecovery.IsSHA256(parts[5]) {
+			if len(parts) != 6 || parts[1] != "HISTORY" || parts[2] != kind || (parts[0] != "APPROVE" && parts[0] != "REVOKE") || parts[3] != fmt.Sprintf("%s#%d", repository.FullName(), issue) || !runrecovery.IsSHA256(parts[5]) {
 				return nil, errors.New("trusted history cutover review statement is malformed or targets another repository or issue")
 			}
 			if parts[4] != workflow {

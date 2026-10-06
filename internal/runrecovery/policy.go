@@ -18,17 +18,21 @@ var workflowInputName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,80}$`)
 var historyCutoverLogin = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$`)
 
 type Engine struct {
-	repository contract.Repository
-	workflows  map[string]workflowPolicy
+	repository       contract.Repository
+	workflows        map[string]workflowPolicy
+	activePromotions map[string]Object
 }
 
 type workflowPolicy struct {
-	mutatorAlternatives       [][]string
-	allowPublication          bool
-	plans                     map[string]planPolicy
-	legacyImportReviews       map[string]bool
-	historyCutoverReviews     map[string]bool
-	historyCutoverReviewIssue *Object
+	mutatorAlternatives         [][]string
+	allowPublication            bool
+	plans                       map[string]planPolicy
+	legacyImportReviews         map[string]bool
+	historyCutoverReviews       map[string]bool
+	historyCutoverReviewIssue   *Object
+	historyPromotionReviewIssue *Object
+	historyPromotionReviews     map[string]bool
+	sourceSHA256                string
 }
 
 type planPolicy struct {
@@ -80,7 +84,7 @@ func NewEngine(policy Object, repository contract.Repository) (*Engine, error) {
 	if err != nil || len(rawWorkflows) == 0 {
 		return nil, recoveryError("recovery policy must contain at least one workflow")
 	}
-	engine := &Engine{repository: repository, workflows: make(map[string]workflowPolicy, len(rawWorkflows))}
+	engine := &Engine{repository: repository, workflows: make(map[string]workflowPolicy, len(rawWorkflows)), activePromotions: map[string]Object{}}
 	for workflow, raw := range rawWorkflows {
 		if !settlementWorkflowFile.MatchString(workflow) {
 			return nil, recoveryError("recovery policy has an invalid workflow filename")
@@ -95,7 +99,7 @@ func NewEngine(policy Object, repository contract.Repository) (*Engine, error) {
 }
 
 func parseWorkflowPolicy(value any, workflow string) (workflowPolicy, error) {
-	raw, err := exactWithOptional(value, []string{"mutator_step_alternatives", "reviewed_source_shas", "allow_publication", "plans"}, []string{"legacy_import_reviews", "history_cutover_reviews", "history_cutover_review_issue"}, "workflow policy")
+	raw, err := exactWithOptional(value, []string{"mutator_step_alternatives", "reviewed_source_shas", "allow_publication", "plans"}, []string{"legacy_import_reviews", "history_cutover_reviews", "history_cutover_review_issue", "history_promotion_review_issue"}, "workflow policy")
 	if err != nil {
 		return workflowPolicy{}, err
 	}
@@ -217,7 +221,18 @@ func parseWorkflowPolicy(value any, workflow string) (workflowPolicy, error) {
 	if len(historyCutoverReviews) > 0 && historyCutoverReviewIssue != nil {
 		return workflowPolicy{}, recoveryError("workflow policy cannot combine static and issue-based history cutover review channels")
 	}
-	return workflowPolicy{mutatorAlternatives: alternatives, allowPublication: allowPublication, plans: plans, legacyImportReviews: legacyReviews, historyCutoverReviews: historyCutoverReviews, historyCutoverReviewIssue: historyCutoverReviewIssue}, nil
+	var promotionIssue *Object
+	if issue, exists := raw["history_promotion_review_issue"]; exists {
+		promotionIssue, err = parseHistoryPromotionReviewIssue(issue)
+		if err != nil {
+			return workflowPolicy{}, err
+		}
+	}
+	encoded, err := Canonical(raw)
+	if err != nil {
+		return workflowPolicy{}, err
+	}
+	return workflowPolicy{mutatorAlternatives: alternatives, allowPublication: allowPublication, plans: plans, legacyImportReviews: legacyReviews, historyCutoverReviews: historyCutoverReviews, historyCutoverReviewIssue: historyCutoverReviewIssue, historyPromotionReviewIssue: promotionIssue, historyPromotionReviews: map[string]bool{}, sourceSHA256: SHA256(encoded)}, nil
 }
 
 // ValidateReviewedHistoryCutover checks the explicitly listed baseline digest
@@ -599,6 +614,9 @@ func (e *Engine) ValidateRecoveryPlan(context, entry, plan Object, root string) 
 	if context != nil {
 		workflow = fmt.Sprint(context["workflow_file"])
 	}
+	if _, err := e.promotionAtRoot(root, workflow); err != nil {
+		return err
+	}
 	cutover, err := e.previewOnlyCutoverAtRoot(root, workflow)
 	if err != nil {
 		return err
@@ -618,6 +636,9 @@ func (e *Engine) ValidateRecoveryPlan(context, entry, plan Object, root string) 
 func (e *Engine) previewOnlyCutoverAtRoot(root, workflow string) (bool, error) {
 	if root == "" {
 		return false, nil
+	}
+	if _, err := e.promotionAtRoot(root, workflow); err != nil {
+		return false, err
 	}
 	path := filepath.Join(root, "settlement-chain.json")
 	info, err := os.Lstat(path)
@@ -730,6 +751,9 @@ func (e *Engine) validateRetainedPlanPolicyFiles(context Object, retainedPlans [
 func (e *Engine) validateRecoveryPlanWithReader(context, entry, plan Object, reader *policyReader) error {
 	if context == nil || entry == nil || plan == nil {
 		return recoveryError("recovery context, manifest entry and plan must be objects")
+	}
+	if err := e.validatePromotionPlanScope(context, entry); err != nil {
+		return err
 	}
 	workflow, ok := context["workflow_file"].(string)
 	if !ok || !settlementWorkflowFile.MatchString(workflow) {

@@ -146,6 +146,8 @@ When legacy evidence has expired, 0.4.0 adds an opt-in [reviewed history cutover
 
 An explicitly reviewed baseline can start a schema-6 **preview-only** recovery chain. New attempts still require native evidence and any later legacy rerun remains pending. The baseline grants no apply or publication authority, and a schema-6 chain cannot register executable plans, resume mutations or promote a publication. It may retain read-only proposals and positively qualified current-run no-op receipts. Exact review comes from a trusted policy digest or an independently configured issue-comment channel, rechecked against complete comments and the author's current write access. Keep failed recovery reports in separate diagnostic artifacts; a diagnostic upload never settles an attempt.
 
+This source adds [explicit fresh-native promotion](plugins/gh-steward/skills/gh-steward-workflow-recovery/references/history-promotion.md), an unreleased capability beyond CLI 0.4.1. `runs promotion-preview` binds the exact preview checkpoint, trusted workflow policy, selected future plan scopes and current issue/PR reads. A separate issue review of that exact promotion can seed schema 7; every checkpoint retains the same quarantined baseline and promotion. Capture and offline validation do not activate it. Native plans still require their own approval, complete live before-state and operation inventory, durable journals and terminal receipts. Promotion excludes historical replay, historical settlement and publication. Opted-in context commands recheck review and current reviewer permission; changed policy, lost lineage or revocation blocks native work.
+
 ## Development and release
 
 Run tests and checks without GitHub credentials or live provider writes:

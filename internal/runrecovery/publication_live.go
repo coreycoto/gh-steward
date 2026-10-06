@@ -28,7 +28,7 @@ func (e *Engine) VerifyPublication(ctx context.Context, reader ActionsReader, in
 	if err != nil {
 		return nil, err
 	}
-	if cutover {
+	if cutover || e.activePromotions[invocation.Workflow] != nil {
 		return nil, errors.New("preview-only history cutover disables publication")
 	}
 	if !e.workflowAllowsPublication(invocation.Workflow) {

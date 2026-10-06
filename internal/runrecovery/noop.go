@@ -226,8 +226,8 @@ func persistRecoveryObservation(root string, invocation Invocation, run, target,
 		return err
 	}
 	observation := Object{"schema_version": 1, "outcome": outcome, "target": target, "run": run, "run_id": invocation.RunID, "attempt": invocation.Attempt, "recovery_key": invocation.RecoveryKey, "chain_sha256": digest, "prepared_frontier_sha256": frontierDigest}
-	if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
-		baseline, err := ValidateHistoryCutover(chain["history_cutover"])
+	if isHistoryCutoverChain(chain) {
+		baseline, err := historyCutoverFromChain(chain)
 		if err != nil {
 			return err
 		}
@@ -326,8 +326,8 @@ func (e *Engine) FinishNoop(ctx context.Context, reader ActionsReader, options N
 		return nil, errors.New("no-op cannot bypass an unsettled predecessor")
 	}
 	var expectedCutoverDigest any
-	if exactInt(chain["schema_version"], historyCutoverSettlementSchemaVersion) {
-		baseline, err := e.ValidateReviewedHistoryCutover(chain["history_cutover"], target)
+	if isHistoryCutoverChain(chain) {
+		baseline, err := e.ValidateReviewedHistoryCutover(mustHistoryCutoverFromChain(chain), target)
 		if err != nil {
 			return nil, err
 		}

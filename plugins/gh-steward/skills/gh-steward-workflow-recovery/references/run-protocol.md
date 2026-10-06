@@ -42,6 +42,8 @@ Current no-op approval uses `kind: local-noop`, `workflow_source_sha256` (the ra
 
 CLI 0.4.0 supports a separately reviewed, preview-only `history_cutover` in chain schema 6. It preserves a complete legacy inventory with unknown outcomes outside the native settlement list. It never substitutes an age cutoff for evidence or imports a fabricated native result. Default schema-4/5 recovery remains strict. Read [history-cutover.md](history-cutover.md) for capture, independent review, revocation, scope and immutable-prefix contracts. Native current-run no-op evidence still follows the rules below.
 
+This source adds schema 7 for [explicit fresh-native promotion](history-promotion.md), currently unreleased beyond 0.4.1. Its `history_promotion` embeds the exact schema-6 preview checkpoint and a separately reviewed selected native scope. It preserves the preview's native prefix and quarantined baseline; it does not copy old unknown attempts into native settlements. Publication is excluded. Every native attempt continues to require the complete ordinary policy, acquisition, before-state, approval, journal, prepared frontier and terminal proof contracts. Review and policy drift hold work, including context commands in opted-in workflows.
+
 ## Current no-op evidence
 
 Create a prepared empty-dispatch context only after the workflow chooses a plan-free outcome. Keep `settlement-chain.json`, `recovery-observation.json`, `events/trigger-event.json`, and `decisions/workflow-noop.json`. The decision has these exact identity fields, plus only its decision-specific `proposal` or `previews` evidence:
