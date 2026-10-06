@@ -92,6 +92,39 @@ func TestPortablePlanningAndGovernanceCommandsAtPublicBoundary(t *testing.T) {
 	}
 }
 
+func TestExecutionTransitionCLILeavesMissingMergedCompletionEvidenceUnchanged(t *testing.T) {
+	root := checkout(t)
+	policy := contract.Object{"statuses": contract.Object{"done": "Done", "active": "Active", "todo": "Todo"}}
+	snapshot := contract.Object{
+		"issue":        contract.Object{"number": int64(17), "state": "OPEN"},
+		"pull_request": contract.Object{"number": int64(3), "state": "MERGED", "is_merged": true, "is_draft": false},
+	}
+	for name, object := range map[string]contract.Object{"policy.json": policy, "snapshot.json": snapshot} {
+		if err := writeFile(root, name, object); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out, stderr bytes.Buffer
+	err := (Runner{Out: &out, Err: &stderr}).Run(context.Background(), []string{
+		"execution", "transition", "--repo-root", root, "--policy", "policy.json", "--input", "snapshot=snapshot.json",
+	})
+	if err != nil {
+		t.Fatal(err, stderr.String())
+	}
+	result, err := contract.Decode(&out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := contract.ObjectAt(result, "data")
+	if err != nil || data["final_status"] != nil {
+		t.Fatalf("missing completion evidence must leave status unchanged: %#v, %v", result, err)
+	}
+	actions, err := contract.Array(data, "actions")
+	if err != nil || len(actions) != 0 {
+		t.Fatalf("missing completion evidence must propose no issue mutation: %#v, %v", actions, err)
+	}
+}
+
 func TestSourceDirtyIsTypedProvenance(t *testing.T) {
 	original := SourceDirty
 	t.Cleanup(func() { SourceDirty = original })

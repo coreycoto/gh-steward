@@ -412,7 +412,7 @@ func normalizeExecutionInventory(raw contract.Object, repo contract.Repository, 
 	if err != nil {
 		return nil, err
 	}
-	transition, err := executionTransition(request.Policy, issue, pr, hasPR, branchExists)
+	transition, err := executionTransition(request.Policy, issue, pr, hasPR, branchExists, defaultBranch)
 	if err != nil {
 		return nil, err
 	}
@@ -932,12 +932,12 @@ func normalizeExecutionProject(raw any, repo contract.Repository, scope ProjectS
 	return contract.Object{"repo": repo.Object(), "project": project["project"], "fields_by_name": project["fields_by_name"], "items": project["items"], "provenance": contract.Object{"live": true, "complete": true, "source": "github_project_api"}}, nil
 }
 
-func executionTransition(policy ExecutionPolicy, issue contract.Object, pr contract.Object, hasPR bool, branchExists *bool) (contract.Object, error) {
+func executionTransition(policy ExecutionPolicy, issue contract.Object, pr contract.Object, hasPR bool, branchExists *bool, defaultBranch string) (contract.Object, error) {
 	var rawPR any
 	if hasPR {
 		rawPR = pr
 	}
-	snapshot := contract.Object{"issue": issue, "pull_request": rawPR}
+	snapshot := contract.Object{"issue": issue, "pull_request": rawPR, "default_branch": defaultBranch}
 	if branchExists != nil {
 		snapshot["branch_exists"] = *branchExists
 	}
@@ -1022,7 +1022,7 @@ func executionOperations(plan contract.Plan) ([]contract.Operation, error) {
 			return &present
 		}
 		return nil
-	}())
+	}(), inventory["default_branch"].(string))
 	if err != nil {
 		return nil, err
 	}
@@ -1066,7 +1066,7 @@ func executionOperations(plan contract.Plan) ([]contract.Operation, error) {
 			})
 		}
 	}
-	if selector.SkipProjectSync {
+	if selector.SkipProjectSync || transition["final_status"] == nil {
 		return ops, nil
 	}
 	project, err := contract.ObjectAt(inventory, "project_inventory")

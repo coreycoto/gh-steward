@@ -9,6 +9,8 @@ Use this skill when the user asks to synchronize a specific issue or pull reques
 
 The `policy` object has exactly `statuses` (`done`, `active`, `todo`), `status_field`, `pr_link_marker_prefix`, `pr_link_number_pattern`, `linked_issue_marker_prefix`, and `link_state_marker_prefix`. Map real consumer status values and stable comment markers explicitly; the tool does not invent them.
 
+A merged pull request proposes completion for an open issue only when the complete closing-reference inventory names that issue and the pull request targets the repository's captured default branch. An issue already reported closed by the complete issue inventory may remain in the configured done status. A reference-only or non-default-base merged pull request leaves an open issue and its existing Project membership and status unchanged.
+
 Prepare from live state and inspect issue/PR identity, linked pull-request evidence, Project membership and status, comment markers, before-state, operations, and `sha256`:
 
 Set `REPOSITORY_URL` to the exact verified HTTPS URL of the selected repository.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -247,9 +248,53 @@ func TestExecutionTransitionRequiresBranchEvidenceAndUsesConfiguredStatuses(t *t
 	}
 	pr := nested(t, snapshot, "pull_request")
 	pr["is_merged"] = true
+	issue, _ := contract.ObjectAt(snapshot, "issue")
+	issue["state"] = "CLOSED"
 	result, err = ExecutionTransition(policy, snapshot)
-	if err != nil || result["sync_state"] != "merged" || result["final_status"] != "Complete" {
-		t.Fatalf("merged PR should resolve to configured done state: %#v, %v", result, err)
+	if err != nil || result["sync_state"] != "merged" || result["final_status"] != "Complete" || len(result["actions"].([]any)) != 0 {
+		t.Fatalf("authoritatively closed issue may remain done without a second close: %#v, %v", result, err)
+	}
+
+	issue["state"] = "OPEN"
+	snapshot["default_branch"] = "main"
+	pr["base_branch"] = "main"
+	pr["closing_issue_numbers"] = []any{int64(41)}
+	result, err = ExecutionTransition(policy, snapshot)
+	if err != nil || result["sync_state"] != "merged" || result["final_status"] != "Complete" || !reflect.DeepEqual(result["actions"], []any{"close-issue"}) {
+		t.Fatalf("default-base closing reference should complete an open issue: %#v, %v", result, err)
+	}
+
+	for _, test := range []struct {
+		name          string
+		baseBranch    string
+		closingIssues any
+		defaultBranch any
+	}{
+		{name: "reference-only", baseBranch: "main", closingIssues: []any{}, defaultBranch: "main"},
+		{name: "non-default base", baseBranch: "release", closingIssues: []any{int64(41)}, defaultBranch: "main"},
+		{name: "missing completion evidence", baseBranch: "main", closingIssues: nil, defaultBranch: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := clone(t, snapshot)
+			candidateIssue, _ := contract.ObjectAt(candidate, "issue")
+			candidateIssue["state"] = "OPEN"
+			candidatePR, _ := contract.ObjectAt(candidate, "pull_request")
+			candidatePR["base_branch"] = test.baseBranch
+			if test.closingIssues != nil {
+				candidatePR["closing_issue_numbers"] = test.closingIssues
+			} else {
+				delete(candidatePR, "closing_issue_numbers")
+			}
+			if test.defaultBranch != nil {
+				candidate["default_branch"] = test.defaultBranch
+			} else {
+				delete(candidate, "default_branch")
+			}
+			got, err := ExecutionTransition(policy, candidate)
+			if err != nil || got["sync_state"] != "merged" || got["final_status"] != nil || len(got["actions"].([]any)) != 0 {
+				t.Fatalf("unverified merged PR proposed completion: %#v, %v", got, err)
+			}
+		})
 	}
 }
 
