@@ -1317,6 +1317,10 @@ func (e *Engine) AppendSettlement(chainValue Object, target any, observed []Obje
 			if err != nil {
 				return nil, err
 			}
+			baseline, err = HistoryCutoverEvidence(baseline)
+			if err != nil {
+				return nil, err
+			}
 			rows, _ := objectArray(baseline["run_inventory"], "history cutover run inventory")
 			for _, row := range rows {
 				if exactInt(row["id"], runID) {

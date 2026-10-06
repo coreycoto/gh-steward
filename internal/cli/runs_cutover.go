@@ -111,11 +111,23 @@ func (r Runner) runHistoryCutover(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
+		if len(encoded)+1 > runrecovery.MaxFileBytes {
+			return errors.New("full cutover evidence envelope exceeds the 8 MiB file bound")
+		}
 		if err := output.Write(append(encoded, '\n')); err != nil {
 			return err
 		}
 	}
 	data := contract.Object{"baseline_sha256": baseline["sha256"], "scope": baseline["scope"], "target": baseline["target"], "activation": "not-performed", "validation": "shape-and-digest-only"}
+	evidence, err := runrecovery.HistoryCutoverEvidence(baseline)
+	if err != nil {
+		return err
+	}
+	data["inventory_counts"] = contract.Object{"runs": len(evidence["run_inventory"].([]any)), "attempts": len(evidence["attempts"].([]any)), "artifacts": len(evidence["artifact_inventory"].([]any)), "state": len(evidence["state_reads"].([]any))}
+	data["evidence_schema"] = baseline["schema_version"]
+	if archive, ok := baseline["evidence"].(contract.Object); ok {
+		data["archive"] = contract.Object{"encoding": archive["encoding"], "compressed_bytes": archive["compressed_bytes"], "uncompressed_bytes": archive["uncompressed_bytes"], "compressed_sha256": archive["compressed_sha256"], "uncompressed_sha256": archive["uncompressed_sha256"]}
+	}
 	if action == "cutover-preview" {
 		data["validation"] = "complete-live-read-only-capture"
 	}

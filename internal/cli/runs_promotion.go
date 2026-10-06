@@ -136,6 +136,9 @@ func (r Runner) runHistoryPromotion(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
+		if len(bytes)+1 > runrecovery.MaxFileBytes {
+			return errors.New("full promotion evidence envelope exceeds the 8 MiB file bound")
+		}
 		if err := output.Write(append(bytes, '\n')); err != nil {
 			return err
 		}

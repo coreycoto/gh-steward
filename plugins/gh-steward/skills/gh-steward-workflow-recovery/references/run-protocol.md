@@ -44,6 +44,8 @@ CLI 0.4.0 supports a separately reviewed, preview-only `history_cutover` in chai
 
 This source adds schema 7 for [explicit fresh-native promotion](history-promotion.md), currently unreleased beyond 0.4.1. Its `history_promotion` embeds the exact schema-6 preview checkpoint and a separately reviewed selected native scope. It preserves the preview's native prefix and quarantined baseline; it does not copy old unknown attempts into native settlements. Publication is excluded. Every native attempt continues to require the complete ordinary policy, acquisition, before-state, approval, journal, prepared frontier and terminal proof contracts. Review and policy drift hold work, including context commands in opted-in workflows.
 
+Large captures can use [baseline schema 2](history-archive.md) inside schema-6/7 checkpoints. This preserves a bounded compressed stream of complete raw records, not a summary of history. The outer baseline digest remains the review identity through current no-op receipts and fresh-process checkpoint acquisition. File/checkpoint, complete-inventory, immutable-prefix, active-attempt and native-lineage guards remain in force.
+
 ## Current no-op evidence
 
 Create a prepared empty-dispatch context only after the workflow chooses a plan-free outcome. Keep `settlement-chain.json`, `recovery-observation.json`, `events/trigger-event.json`, and `decisions/workflow-noop.json`. The decision has these exact identity fields, plus only its decision-specific `proposal` or `previews` evidence:
