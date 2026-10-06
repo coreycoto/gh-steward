@@ -1,12 +1,14 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/coreycoto/gh-steward/internal/apply"
 	"github.com/coreycoto/gh-steward/internal/contract"
 	"github.com/coreycoto/gh-steward/internal/native"
+	"github.com/coreycoto/gh-steward/internal/progress"
 )
 
 func executionTestPolicy() ExecutionPolicy {
@@ -491,6 +494,151 @@ func TestExecutionReDerivesIssueProjectMembershipAndStatusAsSeparateWrites(t *te
 	_, replayWrites, _ := provider.counts()
 	if replayWrites != writes {
 		t.Fatalf("completed writes replayed: %d -> %d", writes, replayWrites)
+	}
+}
+
+func TestExecutionMergedCompletionRequiresDefaultBranchClosingEvidence(t *testing.T) {
+	policy := executionTestPolicy()
+	selector := ExecutionSelector{IssueNumber: 17, Project: ptrProject(executionTestProject())}
+	for _, test := range []struct {
+		name              string
+		issueState        string
+		baseBranch        string
+		closingIssues     []any
+		projectMembership bool
+		wantKinds         []string
+	}{
+		{name: "closed issue remains done", issueState: "CLOSED", baseBranch: "main", closingIssues: []any{}, wantKinds: []string{"project-membership-add", "project-field-set"}},
+		{name: "open issue with default-base closing reference", issueState: "OPEN", baseBranch: "main", closingIssues: []any{int64(17)}, wantKinds: []string{"issue-close", "project-membership-add", "project-field-set"}},
+		{name: "reference-only PR does not add membership", issueState: "OPEN", baseBranch: "main", closingIssues: []any{}, wantKinds: []string{}},
+		{name: "non-default PR preserves existing membership and status", issueState: "OPEN", baseBranch: "release/next", closingIssues: []any{int64(17)}, projectMembership: true, wantKinds: []string{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			inventory := executionTestRawInventory(policy, selector, "MERGED", true, true)
+			graph, _ := contract.ObjectAt(inventory, "issue_inventory")
+			issues, _ := contract.Objects(graph, "issues")
+			issues[0]["state"] = test.issueState
+			pr, _ := contract.ObjectAt(inventory, "pull_request")
+			pr["base_branch"] = test.baseBranch
+			pr["closing_issue_numbers"] = test.closingIssues
+			if test.projectMembership {
+				project, _ := contract.ObjectAt(inventory, "project_inventory")
+				project["items"] = []any{contract.Object{
+					"item_id": "ITEM_17", "number": int64(17),
+					"field_values": contract.Object{"Status": "In Progress"}, "archived": false,
+				}}
+			}
+			provider := newExecutionTestProvider(inventory)
+			plan, err := PrepareExecutionSync(context.Background(), provider, testRepo(), selector, policy, time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC))
+			if err != nil {
+				t.Fatal("prepare merged execution plan", err)
+			}
+			ops, err := (ExecutionSync{}).Operations(plan)
+			if err != nil {
+				t.Fatal("rederive merged execution operations", err)
+			}
+			gotKinds := make([]string, 0, len(ops))
+			for _, op := range ops {
+				gotKinds = append(gotKinds, op.Kind)
+			}
+			if !reflect.DeepEqual(gotKinds, test.wantKinds) {
+				t.Fatalf("merged operations = %v, want %v: %#v", gotKinds, test.wantKinds, ops)
+			}
+			if test.issueState == "OPEN" && test.baseBranch == "main" && len(test.closingIssues) == 1 && ops[len(ops)-1].After["value"] != "Done" {
+				t.Fatalf("verified default-base closing reference did not set configured done status: %#v", ops)
+			}
+			if len(ops) == 0 {
+				project, _ := contract.ObjectAt(plan.Data["inventory"].(map[string]any), "project_inventory")
+				items, _ := contract.Objects(project, "items")
+				if test.projectMembership && (len(items) != 1 || items[0]["field_values"].(map[string]any)["Status"] != "In Progress") {
+					t.Fatalf("partial merged PR changed existing Project state: %#v", items)
+				}
+			}
+		})
+	}
+}
+
+func TestExecutionRejectsObsoleteMergedCompletionPlanAndJournal(t *testing.T) {
+	policy := executionTestPolicy()
+	selector := ExecutionSelector{IssueNumber: 17, Project: ptrProject(executionTestProject())}
+	inventory := executionTestRawInventory(policy, selector, "MERGED", true, true)
+	graph, _ := contract.ObjectAt(inventory, "issue_inventory")
+	issues, _ := contract.Objects(graph, "issues")
+	issues[0]["state"] = "OPEN"
+	pr, _ := contract.ObjectAt(inventory, "pull_request")
+	pr["body"] = "Issue: #17\nRefs #17\n<!-- execution-linked-issue:17 -->\nLink state: auto-link-expected\n<!-- execution-link-state:auto-link-expected -->"
+	pr["closing_issue_numbers"] = []any{}
+	provider := newExecutionTestProvider(inventory)
+	current, err := PrepareExecutionSync(context.Background(), provider, testRepo(), selector, policy, time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal("prepare reference-only execution plan", err)
+	}
+	obsoleteOps := obsoleteMergedCompletionOperations()
+	capturedAt, err := time.Parse(time.RFC3339Nano, current.CapturedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obsolete, err := contract.PreparePlan(current.Command, current.Repository, current.Sources, current.Data, obsoleteOps, capturedAt)
+	if err != nil {
+		t.Fatal("construct obsolete v2 plan", err)
+	}
+
+	root := t.TempDir()
+	journal, err := progress.Open(root, obsolete.Repository, obsolete.Command, obsolete.SHA256)
+	if err != nil {
+		t.Fatal("open obsolete plan journal", err)
+	}
+	for _, op := range obsoleteOps {
+		intent := contract.Object{"id": op.ID, "kind": op.Kind, "target": op.Target, "before": op.Before, "after": op.After}
+		if _, err := journal.Execute(op.ID, intent, func(operationID string) (contract.Object, error) {
+			return contract.Object{"operation_id": operationID}, nil
+		}); err != nil {
+			journal.Close()
+			t.Fatal("seed completed legacy journal", err)
+		}
+	}
+	journalPath := journal.Path()
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	journalBefore, err := os.ReadFile(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executionEngine(root, provider).Apply(context.Background(), obsolete.Object()); err == nil {
+		t.Fatal("obsolete inferred close/status operations were accepted")
+	}
+	journalAfter, err := os.ReadFile(journalPath)
+	if err != nil || !bytes.Equal(journalBefore, journalAfter) {
+		t.Fatalf("obsolete journal was rewritten while rejecting its plan: err=%v", err)
+	}
+	_, writes, err := provider.counts()
+	if err != nil || writes != 0 {
+		t.Fatalf("obsolete plan resumed writes: writes=%d err=%v", writes, err)
+	}
+}
+
+func obsoleteMergedCompletionOperations() []contract.Operation {
+	membershipRef := contract.Object{"from_operation": "execution:project-membership"}
+	return []contract.Operation{
+		{
+			ID: "execution:issue-state", Kind: "issue-close",
+			Target: contract.Object{"issue_number": int64(17), "issue_id": "I_17"},
+			Before: contract.Object{"issue_number": int64(17), "issue_id": "I_17", "state": "OPEN"},
+			After:  contract.Object{"issue_number": int64(17), "issue_id": "I_17", "state": "CLOSED"},
+		},
+		{
+			ID: "execution:project-membership", Kind: "project-membership-add",
+			Target: contract.Object{"project_id": "PVT_backlog", "issue_number": int64(17), "issue_node_id": "I_17"},
+			Before: contract.Object{"present": false, "project_id": "PVT_backlog", "issue_number": int64(17), "issue_node_id": "I_17"},
+			After:  contract.Object{"present": true, "project_id": "PVT_backlog", "issue_number": int64(17), "issue_node_id": "I_17"},
+		},
+		{
+			ID: "execution:project-status", Kind: "project-field-set",
+			Target: contract.Object{"project_id": "PVT_backlog", "issue_number": int64(17), "issue_id": "I_17", "item_ref": membershipRef, "field_name": "Status"},
+			Before: contract.Object{"present": true, "item_ref": membershipRef, "field_name": "Status", "value": contract.Object{"from_membership": "execution:project-membership", "field_name": "Status"}},
+			After:  contract.Object{"present": true, "item_ref": membershipRef, "field_name": "Status", "value": "Done"},
+		},
 	}
 }
 

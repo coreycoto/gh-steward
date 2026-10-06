@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.4.0 — Unreleased
+## 0.4.1 — Unreleased
+
+- Require explicit default-branch closing references before a merged pull request completes an open issue. Reference-only and stacked merges preserve its issue state and Project membership and status; an authoritatively closed issue keeps its done status.
+- Reject obsolete inferred-completion plans before reopening their retained journals or making provider calls. Preserve existing plan, receipt and unknown-write safeguards.
+
+## 0.4.0 — 2026-10-05
 
 - Add read-only cutover previews for complete terminal workflow histories whose original evidence is unavailable. Preserve every old attempt as unknown and quarantined, rather than inventing completion receipts or replaying operations.
 - Introduce explicitly reviewed, preview-only schema-6 checkpoints. Bind the exact baseline and keep new attempts and reruns subject to strict native evidence; reject source drift, incompatible checkpoints and scope expansion.

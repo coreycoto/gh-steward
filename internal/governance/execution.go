@@ -223,12 +223,20 @@ func ExecutionTransition(policy, snapshot contract.Object) (contract.Object, err
 	if err != nil {
 		return nil, err
 	}
-	result := contract.Object{"command": "sync", "issue": issue, "pull_request": pr, "actions": []any{"reopen-issue"}}
+	result := contract.Object{"command": "sync", "issue": issue, "pull_request": pr, "actions": []any{"reopen-issue"}, "final_status": nil}
 	switch {
 	case merged:
 		result["sync_state"] = "merged"
-		result["actions"] = []any{"close-issue"}
-		result["final_status"] = done
+		result["actions"] = []any{}
+		switch issue["state"] {
+		case "CLOSED":
+			result["final_status"] = done
+		case "OPEN":
+			if executionClosesSelectedIssue(issue, pr, snapshot) {
+				result["actions"] = []any{"close-issue"}
+				result["final_status"] = done
+			}
+		}
 	case state == "OPEN" || draft:
 		result["sync_state"] = "draft-or-open"
 		result["final_status"] = active
@@ -249,6 +257,37 @@ func ExecutionTransition(policy, snapshot contract.Object) (contract.Object, err
 		result["generated_at"] = stamp
 	}
 	return result, nil
+}
+
+func executionClosesSelectedIssue(issue, pr, snapshot contract.Object) bool {
+	issueNumber, err := contract.PositiveInteger(issue["number"])
+	if err != nil {
+		return false
+	}
+	defaultBranch, err := requiredString(snapshot, "default_branch")
+	if err != nil {
+		return false
+	}
+	baseBranch, err := requiredString(pr, "base_branch")
+	if err != nil || baseBranch != defaultBranch {
+		return false
+	}
+	closingRaw, ok := pr["closing_issue_numbers"].([]any)
+	if !ok {
+		return false
+	}
+	seen, closesIssue := map[int64]bool{}, false
+	for _, raw := range closingRaw {
+		number, err := contract.PositiveInteger(raw)
+		if err != nil || seen[number] {
+			return false
+		}
+		seen[number] = true
+		if number == issueNumber {
+			closesIssue = true
+		}
+	}
+	return closesIssue
 }
 
 func ExecutionLinkFacts(policy, snapshot contract.Object) (contract.Object, error) {
