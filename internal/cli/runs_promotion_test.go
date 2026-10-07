@@ -53,6 +53,9 @@ func TestPromotionCLISeparatesReadOnlyCaptureAndOfflineValidation(t *testing.T) 
 	if err != nil || dataErr != nil || data["promotion_sha256"] != p["sha256"] || data["activation"] != "not-performed" || data["validation"] != "complete-live-read-only-promotion-capture" {
 		t.Fatal(result, err)
 	}
+	if !runrecovery.Equal(data["promotion_schema_version"], int64(2)) || data["state_contract"] != "github-rest-pr-repository-clock-v1" {
+		t.Fatal("capture summary hid its reconciliation semantics", data)
+	}
 	info, err := os.Stat(filepath.Join(root, "promotion.json"))
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatal("promotion evidence is not private", info, err)
@@ -68,6 +71,9 @@ func TestPromotionCLISeparatesReadOnlyCaptureAndOfflineValidation(t *testing.T) 
 	data, _ = contract.ObjectAt(result, "data")
 	if err != nil || data["validation"] != "shape-and-digest-only" || data["activation"] != "not-performed" {
 		t.Fatal("offline validation claimed review or activation", result, err)
+	}
+	if !runrecovery.Equal(data["promotion_schema_version"], int64(2)) || data["state_contract"] != "github-rest-pr-repository-clock-v1" {
+		t.Fatal("offline validation lost its sealed reconciliation contract", data)
 	}
 }
 

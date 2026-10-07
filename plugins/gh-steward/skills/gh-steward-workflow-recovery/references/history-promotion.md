@@ -54,12 +54,35 @@ Capture preserves the complete preview checkpoint, including any qualified
 native no-op prefix. It rejects uncovered later runs or reruns, partial history,
 active attempts, an open frontier, different baselines or unsafe hosted artifacts.
 It checks history and selected state again before sealing. The full schema-2
-result envelope is retained privately (0600); stdout is a summary. The raw schema-1
+result envelope is retained privately (0600); stdout is a summary. The raw schema-2
 promotion has `scope: fresh-native`, exact target and preview checkpoint,
 `policy_sha256`, a selected plan-name map of exact commands and allowed operation
-kinds, selected raw `state_reads`, fixed exclusions and a canonical `sha256`.
+kinds, selected raw `state_reads`, the versioned `state_contract`, fixed exclusions
+and a canonical `sha256`.
 Both the promotion and resulting checkpoint must fit the 8 MiB artifact bound.
 Offline validation checks shape and digest, not approval or live freshness.
+
+### Reconciliation contract
+
+New captures seal `state_contract: github-rest-pr-repository-clock-v1` into the
+promotion's digest. This contract compares complete issue and PR responses,
+excluding only `base.repo.pushed_at` and `head.repo.pushed_at` in PR endpoint
+responses. Publishing a tag changes those repository clocks without changing the
+selected PR. PR and repository identities, refs, commit SHAs, merge state, labels,
+body, policy fields and every other response field remain exact. The named clocks
+must be present and have a valid timestamp or explicit null. A missing or malformed
+PR, ref or repository identity holds the transition.
+
+The complete raw responses, including both clocks, stay sealed in `state_reads`.
+Comparison never edits the reviewed document or its retained lineage. The same
+contract is used during capture and first admission. An unknown contract or a
+changed document requires a new supported capture and exact review; it cannot
+reuse an existing approval.
+
+Schema-1 promotions remain supported with their original full-response equality.
+They never inherit this contract. CLI 0.5.0 accepts only schema 1; qualify a released
+build containing schema-2 support before capturing or activating a new document.
+The native checkpoint remains schema 7 and embeds the exact promotion unchanged.
 
 The preview checkpoint may contain a [compressed large-history baseline](history-archive.md).
 Promotion keeps its complete sealed document and reviewed digest. It does not
@@ -141,3 +164,10 @@ route or installing an older executable cannot silently resume a schema-7 chain;
 unsupported or unreviewed lineage remains held. Preserve failed reports and
 source proofs. Never rewrite a baseline or delete a native journal to bypass a
 hold, and never replay historical data-bearing operations to obtain green CI.
+
+A run held before context initialization may have only a diagnostic upload.
+Schema-2 state comparison does not settle that attempt, manufacture a no-op receipt
+or absorb it into the quarantined baseline. Complete history still includes it;
+without a qualified native receipt or an explicit supported reconciliation proof,
+subsequent capture and recovery remain held. Deleting a published promotion asset
+does not settle its failed run or undo its recorded revocation.

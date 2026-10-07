@@ -144,6 +144,10 @@ func (r Runner) runHistoryPromotion(ctx context.Context, args []string) error {
 		}
 	}
 	data := contract.Object{"promotion_sha256": promotion["sha256"], "scope": promotion["scope"], "target": promotion["target"], "policy_sha256": promotion["policy_sha256"], "activation": "not-performed", "validation": "shape-and-digest-only"}
+	data["promotion_schema_version"] = promotion["schema_version"]
+	if exactContract, exists := promotion["state_contract"]; exists {
+		data["state_contract"] = exactContract
+	}
 	if action == "promotion-preview" {
 		data["validation"] = "complete-live-read-only-promotion-capture"
 	}
