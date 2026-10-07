@@ -1,7 +1,8 @@
 # Fresh native work after quarantined history
 
 Basic promotion requires CLI 0.5.0 or newer; schema-2 reconciliation and schema-3
-diagnostic-hold proof require CLI 0.5.1 or newer. Qualify a released executable and
+diagnostic-hold proof require CLI 0.5.1 or newer. The repository bookkeeping
+comparison contract requires CLI 0.5.2 or newer. Qualify a released executable and
 its exact source before consumer activation. Keep source delivery,
 read-only capture, human review and consumer activation as separate steps.
 
@@ -65,24 +66,43 @@ Offline validation checks shape and digest, not approval or live freshness.
 
 ### Reconciliation contract
 
-CLI 0.5.1 captures seal `state_contract: github-rest-pr-repository-clock-v1` into the
-promotion's digest. This contract compares complete issue and PR responses,
-excluding only `base.repo.pushed_at` and `head.repo.pushed_at` in PR endpoint
-responses. Publishing a tag changes those repository clocks without changing the
-selected PR. PR and repository identities, refs, commit SHAs, merge state, labels,
-body, policy fields and every other response field remain exact. The named clocks
-must be present and have a valid timestamp or explicit null. A missing or malformed
-PR, ref or repository identity holds the transition.
+CLI 0.5.2 captures seal
+`state_contract: github-rest-pr-repository-bookkeeping-v2` into the promotion's
+digest. The contract compares complete issue and PR responses, projecting only
+the two embedded PR repository objects at `base.repo` and `head.repo`. Metadata
+publication and unrelated activity can update derived repository statistics
+without changing selected work. Only the following validated fields are outside
+comparison in those two objects:
 
-The complete raw responses, including both clocks, stay sealed in `state_reads`.
+| Repository fields | Evidence requirements |
+| --- | --- |
+| `pushed_at`, `updated_at` | Both present; RFC 3339 timestamps or explicit null |
+| `size` | Present nonnegative integer within the supported integer range |
+| `stargazers_count`, `watchers_count`, `watchers`, `forks_count`, `forks`, `open_issues_count`, `open_issues`, `network_count`, `subscribers_count` | Optional; when present, nonnegative integers within the supported range |
+
+All other fields remain exact, including unknown fields. The repository must have
+complete immutable identity, a matching name/owner identity, a nonempty default
+branch, boolean privacy/fork/archive/disabled settings and consistent visibility.
+Refs, commit SHAs, repository ownership and security settings, PR identities,
+merge/review state, title, body, labels and all other PR behavior remain exact.
+Issue observations keep full-response equality. The named exclusions never apply
+to similarly named fields elsewhere in a PR or issue. A deleted head repository
+remains an explicit, exactly compared null; a missing base repository holds.
+Malformed or incomplete evidence holds before admission.
+
+The complete raw responses, including every excluded statistic, stay sealed in `state_reads`.
 Comparison never edits the reviewed document or its retained lineage. The same
 contract is used during capture and first admission. An unknown contract or a
 changed document requires a new supported capture and exact review; it cannot
 reuse an existing approval.
 
 Schema-1 promotions remain supported with their original full-response equality.
-They never inherit this contract. CLI 0.5.0 accepts only schema 1; qualify the exact
-released CLI 0.5.1 or newer before capturing or activating a new document.
+Existing schema-2/3 `github-rest-pr-repository-clock-v1` documents remain supported
+with their original exclusions of only `base.repo.pushed_at` and
+`head.repo.pushed_at`; size, other clocks and counters remain exact for those
+reviews. Neither old format inherits the new projection. CLI 0.5.0 accepts only
+schema 1; CLI 0.5.1 rejects the bookkeeping contract. Qualify the exact released
+CLI 0.5.2 or newer before capturing or activating a bookkeeping-contract document.
 The native checkpoint remains schema 7 and embeds the exact promotion unchanged.
 
 ### Diagnostic holds after the baseline
