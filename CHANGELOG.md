@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 — 2026-10-07
+
+- Capture schema-2 promotions with an explicit reconciliation contract that tolerates only PR repository publication-clock changes. Preserve complete raw evidence and strict comparison of every other selected field; existing schema-1 grants keep their original comparison.
+- Add explicit `promotion-preview --held-run-id` selection for diagnostic-only failed first attempts. Schema-3 promotions seal authenticated executed-workflow source, exact diagnostic ZIP bytes and complete positively skipped mutators in a separate no-dispatch ledger.
+- Preserve the original quarantine and native settlement inventory. Held attempts cannot become executable work, resumable frontiers or completion receipts; later attempts remain uncovered. Capture and first admission recheck evidence, and new documents require fresh exact review and separate activation authority.
+
 ## 0.5.0 — 2026-10-06
 
 - Add read-only promotion previews and offline validation for a separately reviewed transition from quarantined preview history to selected fresh native plans. Bind the exact preview checkpoint, trusted policy, plan scopes and current reconciliation reads; preserve ordinary per-plan approval, before-state, journal and terminal proof requirements.

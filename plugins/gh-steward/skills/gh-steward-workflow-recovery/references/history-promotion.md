@@ -1,6 +1,7 @@
 # Fresh native work after quarantined history
 
-This capability requires CLI 0.5.0 or newer. Qualify a released executable and
+Basic promotion requires CLI 0.5.0 or newer; schema-2 reconciliation and schema-3
+diagnostic-hold proof require CLI 0.5.1 or newer. Qualify a released executable and
 its exact source before consumer activation. Keep source delivery,
 read-only capture, human review and consumer activation as separate steps.
 
@@ -64,7 +65,7 @@ Offline validation checks shape and digest, not approval or live freshness.
 
 ### Reconciliation contract
 
-New captures seal `state_contract: github-rest-pr-repository-clock-v1` into the
+CLI 0.5.1 captures seal `state_contract: github-rest-pr-repository-clock-v1` into the
 promotion's digest. This contract compares complete issue and PR responses,
 excluding only `base.repo.pushed_at` and `head.repo.pushed_at` in PR endpoint
 responses. Publishing a tag changes those repository clocks without changing the
@@ -80,15 +81,15 @@ changed document requires a new supported capture and exact review; it cannot
 reuse an existing approval.
 
 Schema-1 promotions remain supported with their original full-response equality.
-They never inherit this contract. CLI 0.5.0 accepts only schema 1; qualify a released
-build containing schema-2 support before capturing or activating a new document.
+They never inherit this contract. CLI 0.5.0 accepts only schema 1; qualify the exact
+released CLI 0.5.1 or newer before capturing or activating a new document.
 The native checkpoint remains schema 7 and embeds the exact promotion unchanged.
 
 ### Diagnostic holds after the baseline
 
 A failed first attempt from `workflow_dispatch` or `workflow_run` may stop before
-context initialization and upload only its recovery diagnostic. Source builds
-with schema-3 support can capture its separate positive no-dispatch proof by
+context initialization and upload only its recovery diagnostic. CLI 0.5.1 or newer
+can capture its separate positive no-dispatch proof by
 adding `--held-run-id ID` to `promotion-preview` (repeatable; at most 16).
 Selection is explicit; the default still rejects uncovered diagnostic-only runs.
 
