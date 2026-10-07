@@ -1,7 +1,7 @@
 # Fresh native work after quarantined history
 
-This source capability is unreleased; CLI 0.4.1 cannot use it. Qualify a released
-executable and its exact source before consumer activation. Keep source delivery,
+This capability requires CLI 0.5.0 or newer. Qualify a released executable and
+its exact source before consumer activation. Keep source delivery,
 read-only capture, human review and consumer activation as separate steps.
 
 Promotion preserves unknown history while selecting future native work. It never

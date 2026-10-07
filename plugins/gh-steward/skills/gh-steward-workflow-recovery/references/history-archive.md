@@ -1,6 +1,6 @@
 # Complete large-history evidence
 
-This source capability is unreleased beyond CLI 0.4.1. Use the same
+This capability requires CLI 0.5.0 or newer. Use the same
 `cutover-preview` and `cutover-validate` commands. Capture keeps small snapshots
 in baseline schema 1 and automatically uses schema 2 when the complete raw
 snapshot needs compression to fit the 8 MiB file/checkpoint budget, reserving

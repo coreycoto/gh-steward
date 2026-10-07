@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 — 2026-10-06
+
+- Add read-only promotion previews and offline validation for a separately reviewed transition from quarantined preview history to selected fresh native plans. Bind the exact preview checkpoint, trusted policy, plan scopes and current reconciliation reads; preserve ordinary per-plan approval, before-state, journal and terminal proof requirements.
+- Require current independent promotion review and reviewer permission. Reject revocation, policy drift, mixed or lost lineage and uncovered predecessors. Preserve historical attempts as unknown; historical replay, historical settlement and publication remain excluded.
+- Capture complete large histories in deterministic sealed gzip/NDJSON baselines while retaining the 8 MiB ordinary file/checkpoint limit. Preserve every raw run, exact attempt, artifact and selected state read, with explicit compressed, decompressed, record, depth, node and inventory limits.
+- Validate archive framing, checksums, identities and complete raw semantics before admission. Preserve the same outer review digest through native no-op checkpoints, fresh-process acquisition and promotion; reject truncation, dishonest sizes, foreign or duplicate evidence and trailing payloads.
+
 ## 0.4.1 — 2026-10-06
 
 - Validate manually reviewed execution plan sets through their exact dispatch approval contract. Preserve the original approval across interruptions and keep legacy execution-event validation unchanged.
