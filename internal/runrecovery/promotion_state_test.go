@@ -11,14 +11,33 @@ import (
 const promotionPREndpoint = "repos/example/widgets/pulls/3"
 
 func promotionPRState() Object {
-	repo := Object{"id": int64(42), "node_id": "R_widgets", "full_name": "example/widgets", "html_url": "https://github.com/example/widgets", "private": false, "default_branch": "main", "owner": Object{"login": "example"}, "pushed_at": "2026-03-17T10:00:00Z"}
+	repo := Object{
+		"id": int64(42), "node_id": "R_widgets", "name": "widgets", "full_name": "example/widgets", "html_url": "https://github.com/example/widgets",
+		"private": false, "visibility": "public", "fork": false, "archived": false, "disabled": false, "default_branch": "main",
+		"owner":      Object{"id": int64(21), "node_id": "O_example", "login": "example", "type": "Organization"},
+		"created_at": "2025-01-01T10:00:00Z", "pushed_at": "2026-03-17T10:00:00Z", "updated_at": "2026-03-17T10:00:00Z",
+		"size": int64(4096), "stargazers_count": int64(10), "watchers_count": int64(10), "watchers": int64(10), "forks_count": int64(2), "forks": int64(2),
+		"open_issues_count": int64(3), "open_issues": int64(3), "network_count": int64(2), "subscribers_count": int64(1),
+	}
+	baseRepo, headRepo := cloneNativeObject(repo), cloneNativeObject(repo)
+	baseRepo["owner"] = cloneNativeObject(repo["owner"].(Object))
+	headRepo["owner"] = cloneNativeObject(repo["owner"].(Object))
 	return Object{
 		"id": int64(30), "node_id": "PR_3", "number": int64(3), "html_url": "https://github.com/example/widgets/pull/3",
 		"title": "Reviewed change", "body": "Closes #17", "state": "open", "labels": []any{Object{"name": "automerge"}},
 		"draft": false, "merged": false, "merged_at": nil, "merge_commit_sha": nil,
-		"base": Object{"ref": "main", "sha": strings.Repeat("a", 40), "repo": cloneNativeObject(repo)},
-		"head": Object{"ref": "codex/change", "sha": strings.Repeat("b", 40), "repo": cloneNativeObject(repo)},
+		"base": Object{"ref": "main", "sha": strings.Repeat("a", 40), "repo": baseRepo},
+		"head": Object{"ref": "codex/change", "sha": strings.Repeat("b", 40), "repo": headRepo},
 	}
+}
+
+func clonePromotionObject(t *testing.T, value Object) Object {
+	t.Helper()
+	copyValue, err := cloneObject(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return copyValue
 }
 
 func promotionPRFixture(t *testing.T) (*preparedLifecycle, Object, Object, Object) {
@@ -30,7 +49,7 @@ func promotionPRFixture(t *testing.T) (*preparedLifecycle, Object, Object, Objec
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.reader.reads[promotionPREndpoint] = cloneNativeObject(state)
+	f.reader.reads[promotionPREndpoint] = clonePromotionObject(t, state)
 	return f, b, p, legacy
 }
 
@@ -83,7 +102,7 @@ func TestPromotionSchemaOneKeepsFullResponseComparison(t *testing.T) {
 	}
 }
 
-func TestPromotionClockContractStillHoldsAllOtherDrift(t *testing.T) {
+func TestPromotionRepositoryContractStillHoldsAllOtherDrift(t *testing.T) {
 	changes := map[string]func(Object){
 		"PR identity":                func(s Object) { s["id"] = int64(31) },
 		"PR node":                    func(s Object) { s["node_id"] = "PR_other" },
@@ -110,8 +129,24 @@ func TestPromotionClockContractStillHoldsAllOtherDrift(t *testing.T) {
 		"repository privacy":         func(s Object) { s["base"].(Object)["repo"].(Object)["private"] = true },
 		"repository owner":           func(s Object) { s["head"].(Object)["repo"].(Object)["owner"] = Object{"login": "foreign"} },
 		"default branch":             func(s Object) { s["base"].(Object)["repo"].(Object)["default_branch"] = "release" },
+		"repository name":            func(s Object) { s["base"].(Object)["repo"].(Object)["name"] = "other" },
+		"repository archived":        func(s Object) { s["base"].(Object)["repo"].(Object)["archived"] = true },
+		"repository disabled":        func(s Object) { s["base"].(Object)["repo"].(Object)["disabled"] = true },
+		"repository fork":            func(s Object) { s["base"].(Object)["repo"].(Object)["fork"] = true },
+		"repository visibility":      func(s Object) { s["base"].(Object)["repo"].(Object)["visibility"] = "private" },
+		"repository creation time":   func(s Object) { s["base"].(Object)["repo"].(Object)["created_at"] = "2026-03-18T10:00:00Z" },
+		"repository merge policy":    func(s Object) { s["base"].(Object)["repo"].(Object)["allow_merge_commit"] = false },
+		"owner identity":             func(s Object) { s["base"].(Object)["repo"].(Object)["owner"].(Object)["id"] = int64(22) },
+		"owner node":                 func(s Object) { s["base"].(Object)["repo"].(Object)["owner"].(Object)["node_id"] = "O_other" },
+		"owner type":                 func(s Object) { s["base"].(Object)["repo"].(Object)["owner"].(Object)["type"] = "User" },
+		"malformed size":             func(s Object) { s["base"].(Object)["repo"].(Object)["size"] = int64(-1) },
+		"malformed update clock":     func(s Object) { s["base"].(Object)["repo"].(Object)["updated_at"] = "unknown" },
+		"missing privacy setting":    func(s Object) { delete(s["base"].(Object)["repo"].(Object), "private") },
 		"unknown repository field":   func(s Object) { s["head"].(Object)["repo"].(Object)["future_policy"] = true },
 		"root publication clock":     func(s Object) { s["pushed_at"] = "2026-03-18T10:00:00Z" },
+		"root size":                  func(s Object) { s["size"] = int64(4111) },
+		"root counter":               func(s Object) { s["open_issues_count"] = int64(4) },
+		"ref size":                   func(s Object) { s["head"].(Object)["size"] = int64(4111) },
 		"missing repository clock":   func(s Object) { delete(s["head"].(Object)["repo"].(Object), "pushed_at") },
 		"malformed repository clock": func(s Object) { s["head"].(Object)["repo"].(Object)["pushed_at"] = "unknown" },
 	}
@@ -139,10 +174,10 @@ func TestPromotionClockContractStillHoldsAllOtherDrift(t *testing.T) {
 }
 
 func TestPromotionComparisonContractIsPartOfTheExactReview(t *testing.T) {
-	for _, name := range []string{"missing", "unknown", "schema one with contract", "changed raw clock", "new reviewed digest"} {
+	for _, name := range []string{"missing", "unknown", "schema one with contract", "supported old contract", "changed raw clock", "changed raw statistic", "new reviewed digest", "new statistic digest"} {
 		t.Run(name, func(t *testing.T) {
 			f, _, original, _ := promotionPRFixture(t)
-			p := cloneNativeObject(original)
+			p := clonePromotionObject(t, original)
 			switch name {
 			case "missing":
 				delete(p, "state_contract")
@@ -150,13 +185,20 @@ func TestPromotionComparisonContractIsPartOfTheExactReview(t *testing.T) {
 				p["state_contract"] = "ignore-all-state"
 			case "schema one with contract":
 				p["schema_version"] = int64(1)
+			case "supported old contract":
+				p["state_contract"] = promotionClockStateContract
 			case "changed raw clock", "new reviewed digest":
 				publishPromotionTag(p["state_reads"].([]any)[0].(Object)["object"].(Object))
+			case "changed raw statistic", "new statistic digest":
+				p["state_reads"].([]any)[0].(Object)["object"].(Object)["base"].(Object)["repo"].(Object)["size"] = int64(4111)
 			}
-			if name != "changed raw clock" {
+			if name != "changed raw clock" && name != "changed raw statistic" {
 				resealPromotion(t, p)
 			}
 			admitPromotionFixture(t, f.engine, original)
+			if _, err := f.engine.ValidateReviewedHistoryPromotion(original, original["target"]); err != nil {
+				t.Fatal("original exact review became invalid", err)
+			}
 			if _, err := f.engine.ValidateReviewedHistoryPromotion(p, p["target"]); err == nil {
 				t.Fatal("altered document inherited the original review")
 			}
@@ -176,7 +218,10 @@ func (r *changingPromotionStateReader) Read(ctx context.Context, endpoint string
 		return value, err
 	}
 	r.stateReads++
-	copyValue := cloneNativeObject(value)
+	copyValue, err := cloneObject(value)
+	if err != nil {
+		return nil, err
+	}
 	if r.stateReads == 2 {
 		r.change(copyValue)
 	}
@@ -184,12 +229,14 @@ func (r *changingPromotionStateReader) Read(ctx context.Context, endpoint string
 }
 
 func TestPromotionCaptureUsesTheSameComparisonContractAsAdmission(t *testing.T) {
-	for _, name := range []string{"tag clock", "business state"} {
+	for _, name := range []string{"tag clock", "repository bookkeeping", "business state"} {
 		t.Run(name, func(t *testing.T) {
 			f, b, _, legacy := promotionPRFixture(t)
 			r := &changingPromotionStateReader{recoveryReaderFixture: historyCutoverFixture([]Object{legacy}, nil, nil, map[string]Object{promotionPREndpoint: promotionPRState()}), change: publishPromotionTag}
 			if name == "business state" {
 				r.change = func(s Object) { s["body"] = "Changed during capture" }
+			} else if name == "repository bookkeeping" {
+				r.change = changePromotionRepositoryBookkeeping
 			}
 			p, err := f.engine.PreviewHistoryPromotion(context.Background(), r, b, nil, []string{"execution"}, []string{promotionPREndpoint})
 			if name == "business state" {
@@ -279,7 +326,7 @@ func TestPromotionClockContractPreservesExplicitNullHeadRepository(t *testing.T)
 	if err != nil {
 		t.Fatal("explicit provider null was rejected", err)
 	}
-	live := cloneNativeObject(state)
+	live := clonePromotionObject(t, state)
 	live["base"].(Object)["repo"].(Object)["pushed_at"] = "2026-03-18T10:00:00Z"
 	f.reader.reads[promotionPREndpoint] = live
 	admitPromotionFixture(t, f.engine, p)

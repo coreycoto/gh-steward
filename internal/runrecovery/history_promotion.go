@@ -39,7 +39,7 @@ func ValidateHistoryPromotion(value any) (Object, error) {
 	if (!exactInt(p["schema_version"], 1) && !exactInt(p["schema_version"], 2) && !exactInt(p["schema_version"], 3)) || p["scope"] != "fresh-native" || !IsSHA256(p["policy_sha256"]) || !Equal(p["excluded_operations"], historyPromotionExclusions) {
 		return nil, recoveryError("history promotion has an unsupported schema, scope, policy or exclusions")
 	}
-	if !exactInt(p["schema_version"], 1) && p["state_contract"] != promotionStateContract {
+	if !exactInt(p["schema_version"], 1) && !supportedPromotionStateContract(p["state_contract"]) {
 		return nil, recoveryError("history promotion has an unsupported reconciliation contract")
 	}
 	target, err := ValidateTarget(p["target"])
@@ -89,7 +89,7 @@ func ValidateHistoryPromotion(value any) (Object, error) {
 		previous = endpoint
 	}
 	if !exactInt(p["schema_version"], 1) {
-		if _, err := promotionStateProjection(reads, target); err != nil {
+		if _, err := promotionStateProjection(reads, target, p["state_contract"].(string)); err != nil {
 			return nil, err
 		}
 	}

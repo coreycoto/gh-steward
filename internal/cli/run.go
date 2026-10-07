@@ -26,7 +26,7 @@ import (
 	"github.com/coreycoto/gh-steward/internal/workflow"
 )
 
-var Version = "0.5.1-dev"
+var Version = "0.5.2-dev"
 var SourceRevision = "unknown"
 var SourceDirty = "unknown"
 

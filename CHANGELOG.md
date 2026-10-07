@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2 — Unreleased
+
+- Capture new promotions with a versioned PR repository bookkeeping projection. Validate and retain complete raw timestamps and numeric storage/social/issue statistics while excluding those fields from admission equality. Preserve strict comparison of PR behavior, repository identities, ownership, security settings, refs, commit IDs and unknown fields.
+- Keep existing schema-1 full-response and schema-2/3 publication-clock reviews under their original comparison semantics. A new contract is sealed into the exact review digest and requires a new supported capture and independent review; it does not reinterpret existing grants or checkpoints.
+- Retain unchanged quarantine, diagnostic no-dispatch proof, trusted policy, per-plan approvals and native execution/settlement requirements. No historical replay, completion or activation is inferred from bookkeeping changes.
+
 ## 0.5.1 — 2026-10-07
 
 - Capture schema-2 promotions with an explicit reconciliation contract that tolerates only PR repository publication-clock changes. Preserve complete raw evidence and strict comparison of every other selected field; existing schema-1 grants keep their original comparison.
