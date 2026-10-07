@@ -26,17 +26,20 @@ func ValidateHistoryPromotion(value any) (Object, error) {
 		return nil, err
 	}
 	fields := historyPromotionFields
-	if exactInt(shape["schema_version"], 2) {
+	if exactInt(shape["schema_version"], 2) || exactInt(shape["schema_version"], 3) {
 		fields = append(append([]string{}, fields...), "state_contract")
+	}
+	if exactInt(shape["schema_version"], 3) {
+		fields = append(fields, "held_attempts")
 	}
 	p, err := Exact(value, fields, "history promotion")
 	if err != nil {
 		return nil, err
 	}
-	if (!exactInt(p["schema_version"], 1) && !exactInt(p["schema_version"], 2)) || p["scope"] != "fresh-native" || !IsSHA256(p["policy_sha256"]) || !Equal(p["excluded_operations"], historyPromotionExclusions) {
+	if (!exactInt(p["schema_version"], 1) && !exactInt(p["schema_version"], 2) && !exactInt(p["schema_version"], 3)) || p["scope"] != "fresh-native" || !IsSHA256(p["policy_sha256"]) || !Equal(p["excluded_operations"], historyPromotionExclusions) {
 		return nil, recoveryError("history promotion has an unsupported schema, scope, policy or exclusions")
 	}
-	if exactInt(p["schema_version"], 2) && p["state_contract"] != promotionStateContract {
+	if !exactInt(p["schema_version"], 1) && p["state_contract"] != promotionStateContract {
 		return nil, recoveryError("history promotion has an unsupported reconciliation contract")
 	}
 	target, err := ValidateTarget(p["target"])
@@ -85,10 +88,13 @@ func ValidateHistoryPromotion(value any) (Object, error) {
 		}
 		previous = endpoint
 	}
-	if exactInt(p["schema_version"], 2) {
+	if !exactInt(p["schema_version"], 1) {
 		if _, err := promotionStateProjection(reads, target); err != nil {
 			return nil, err
 		}
+	}
+	if err := validatePromotionHeldAttempts(p, nil); err != nil {
+		return nil, err
 	}
 	if err := verifyObjectDigest(p); err != nil {
 		return nil, err
@@ -149,7 +155,7 @@ func (e *Engine) recheckPromotionState(ctx context.Context, reader ActionsReader
 	if err != nil || !equal {
 		return recoveryError("live reconciliation state differs from the exact reviewed promotion")
 	}
-	return nil
+	return e.recheckPromotionHeldAttempts(ctx, reader, promotion)
 }
 
 func parseHistoryPromotionReviewIssue(value any) (*Object, error) {
@@ -223,6 +229,9 @@ func (e *Engine) ValidateReviewedHistoryPromotion(value any, target any) (Object
 		return nil, recoveryError("promotion lacks an exact current independent review or its trusted policy changed")
 	}
 	if err := e.validatePromotionScopes(p, policy); err != nil {
+		return nil, err
+	}
+	if err := validatePromotionHeldAttempts(p, &policy); err != nil {
 		return nil, err
 	}
 	checkpoint := p["preview_checkpoint"].(Object)
@@ -305,7 +314,7 @@ func promotionCheckpointHistory(checkpoint, baseline Object) ([]Object, map[int6
 
 // PreviewHistoryPromotion captures only read-only evidence. A supplied preview
 // checkpoint must have been acquired by exact hosted artifact identity first.
-func (e *Engine) PreviewHistoryPromotion(ctx context.Context, reader ActionsReader, baseline Object, checkpoint Object, planNames, endpoints []string) (Object, error) {
+func (e *Engine) PreviewHistoryPromotion(ctx context.Context, reader ActionsReader, baseline Object, checkpoint Object, planNames, endpoints []string, heldRunIDs ...int64) (Object, error) {
 	if reader == nil || len(endpoints) == 0 {
 		return nil, errors.New("promotion preview requires a reader and explicit reconciliation endpoints")
 	}
@@ -351,7 +360,36 @@ func (e *Engine) PreviewHistoryPromotion(ctx context.Context, reader ActionsRead
 		return nil, err
 	}
 	covered, highwaters, err := promotionCheckpointHistory(checkpoint, baseline)
-	if err != nil || !Equal(covered, sortRunRows(append([]Object{}, observed...))) || !Equal(highwaters, attempts) {
+	if err != nil {
+		return nil, err
+	}
+	heldIDs, err := capturePromotionHoldIDs(heldRunIDs)
+	if err != nil {
+		return nil, err
+	}
+	heldProofs := []Object{}
+	for _, id := range heldIDs {
+		if highwaters[id] != 0 || attempts[id] != 1 {
+			return nil, recoveryError("held proof must name an uncovered first attempt after the unchanged baseline")
+		}
+		proof, err := e.captureHeldAttempt(ctx, reader, target, id, artifacts)
+		if err != nil {
+			return nil, err
+		}
+		var observedRun Object
+		for _, run := range observed {
+			if exactInt(run["id"], id) {
+				observedRun = run
+			}
+		}
+		if !Equal(observedRun, proof["run"]) {
+			return nil, recoveryError("held proof differs from complete workflow history")
+		}
+		heldProofs = append(heldProofs, proof)
+		covered = append(covered, proof["run"].(Object))
+		highwaters[id] = 1
+	}
+	if !Equal(sortRunRows(covered), sortRunRows(append([]Object{}, observed...))) || !Equal(highwaters, attempts) {
 		return nil, recoveryError("promotion preview cannot absorb uncaptured later runs or attempts")
 	}
 	if err := validateHistoryCutoverNativeArtifacts(target, baseline, observed, attempts, artifacts); err != nil {
@@ -385,6 +423,12 @@ func (e *Engine) PreviewHistoryPromotion(ctx context.Context, reader ActionsRead
 	p := Object{"schema_version": int64(2), "state_contract": promotionStateContract, "scope": "fresh-native", "target": target,
 		"preview_checkpoint": checkpoint, "policy_sha256": policy.sourceSHA256, "plans": plans,
 		"state_reads": objectRows(reads), "excluded_operations": historyPromotionExclusions}
+	if len(heldProofs) != 0 {
+		p["schema_version"], p["held_attempts"] = int64(3), objectRows(heldProofs)
+		if err := e.recheckPromotionHeldAttempts(ctx, reader, p); err != nil {
+			return nil, err
+		}
+	}
 	equal, err := equalPromotionState(p, currentReads)
 	if err != nil || !equal {
 		return nil, recoveryError("reconciliation state changed during promotion capture")

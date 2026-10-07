@@ -15,7 +15,7 @@ func equalPromotionState(promotion Object, current []Object) (bool, error) {
 	if exactInt(promotion["schema_version"], 1) {
 		return Equal(promotion["state_reads"], objectRows(current)), nil
 	}
-	if !exactInt(promotion["schema_version"], 2) || promotion["state_contract"] != promotionStateContract {
+	if (!exactInt(promotion["schema_version"], 2) && !exactInt(promotion["schema_version"], 3)) || promotion["state_contract"] != promotionStateContract {
 		return false, recoveryError("unsupported promotion reconciliation contract")
 	}
 	retained, err := objectArray(promotion["state_reads"], "promotion reconciliation reads")

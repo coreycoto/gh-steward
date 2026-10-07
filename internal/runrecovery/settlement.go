@@ -711,6 +711,7 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 		return nil, recoveryError("settlement checkpoint is for another repository or workflow target")
 	}
 	cutoverHighwaters := map[int64]int64{}
+	heldRuns := map[int64]Object{}
 	if isHistoryCutoverChain(chain) {
 		baselineValue, err := historyCutoverFromChain(chain)
 		if err != nil {
@@ -739,6 +740,10 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 			if !Equal(rows[i], prefix[i]) {
 				return nil, recoveryError("promoted checkpoint changed its reviewed preview prefix")
 			}
+		}
+		for _, proof := range promotionHeldAttempts(promotion) {
+			run := proof["run"].(Object)
+			heldRuns[mustPositive(run["id"])] = run
 		}
 	}
 	inventoryRows, err := array(chain["inventory"], "checkpoint inventory")
@@ -790,6 +795,18 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 		}
 		currentByID[id] = checkedRun
 	}
+	for id, run := range heldRuns {
+		if !Equal(currentByID[id], run) || observedAttempts[id] < 1 {
+			return nil, recoveryError("complete workflow history lost or changed a reviewed held attempt")
+		}
+	}
+	for _, raw := range preparedFrontier {
+		entry, _ := object(raw, "prepared frontier entry")
+		source, _ := object(entry["source"], "prepared frontier source")
+		if heldRuns[mustPositive(source["run_id"])] != nil {
+			return nil, recoveryError("reviewed diagnostic hold cannot become resumable native work")
+		}
+	}
 	coveredByID := make(map[int64]Object, len(inventoryRows))
 	previousID := int64(0)
 	for _, raw := range inventoryRows {
@@ -806,6 +823,9 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 			return nil, recoveryError("covered run inventory has duplicate, invalid or unordered identities")
 		}
 		previousID = runID
+		if heldRuns[runID] != nil {
+			return nil, recoveryError("reviewed diagnostic hold must remain outside native settlement inventory")
+		}
 		if _, err := positiveInteger(item["settled_attempt"], "settled attempt frontier"); err != nil {
 			return nil, err
 		}
@@ -874,7 +894,17 @@ func (e *Engine) ValidateChain(value any, targetValue any, observed []Object, ob
 			return nil, recoveryError("latest attempt inventory contains a run absent from complete history")
 		}
 	}
-	if err := e.validatePreparedFrontier(chain, target, observed, observedAttempts, coveredByID, recordsByRun, cutoverHighwaters); err != nil {
+	// Chronology excludes the two independently represented kinds of covered
+	// predecessors. This map is local; holds never enter quarantine or native
+	// inventory, and the explicit checks above prohibit resuming their runs.
+	frontierHighwaters := map[int64]int64{}
+	for id, attempt := range cutoverHighwaters {
+		frontierHighwaters[id] = attempt
+	}
+	for id := range heldRuns {
+		frontierHighwaters[id] = 1
+	}
+	if err := e.validatePreparedFrontier(chain, target, observed, observedAttempts, coveredByID, recordsByRun, frontierHighwaters); err != nil {
 		return nil, err
 	}
 	return chain, nil
@@ -1112,6 +1142,7 @@ func PendingAttempts(chainValue Object, observed []Object, latest map[int64]int6
 		return nil, recoveryError("complete workflow history exceeds its bound or has an inconsistent attempt inventory")
 	}
 	covered := map[int64]int64{}
+	heldRuns := map[int64]Object{}
 	baselineHighwaters := map[int64]int64{}
 	if isHistoryCutoverChain(chainValue) {
 		baseline, err := historyCutoverFromChain(chainValue)
@@ -1121,6 +1152,20 @@ func PendingAttempts(chainValue Object, observed []Object, latest map[int64]int6
 		baselineHighwaters, err = validateHistoryCutoverPrefix(baseline, observed, latest)
 		if err != nil {
 			return nil, err
+		}
+	}
+	if exactInt(chainValue["schema_version"], historyPromotionSettlementSchemaVersion) {
+		promotion, err := ValidateHistoryPromotion(chainValue["history_promotion"])
+		if err != nil {
+			return nil, err
+		}
+		for _, proof := range promotionHeldAttempts(promotion) {
+			run := proof["run"].(Object)
+			id := mustPositive(run["id"])
+			if id == currentID {
+				return nil, recoveryError("reviewed diagnostic hold cannot be replayed or used for fresh work")
+			}
+			heldRuns[id], covered[id] = run, 1
 		}
 	}
 	items, err := array(chainValue["inventory"], "checkpoint inventory")
@@ -1147,6 +1192,9 @@ func PendingAttempts(chainValue Object, observed []Object, latest map[int64]int6
 		if baselineHighwaters[id] > 0 && frontier < baselineHighwaters[id] {
 			return nil, recoveryError("schema-6 native inventory is behind its separately retained quarantine boundary")
 		}
+		if heldRuns[id] != nil {
+			return nil, recoveryError("reviewed diagnostic hold cannot become a native settlement")
+		}
 		covered[id] = frontier
 	}
 	seen := map[int64]bool{}
@@ -1158,6 +1206,9 @@ func PendingAttempts(chainValue Object, observed []Object, latest map[int64]int6
 			return nil, recoveryError("observed workflow history has invalid or duplicate run IDs")
 		}
 		seen[id] = true
+		if heldRuns[id] != nil && !Equal(heldRuns[id], run) {
+			return nil, recoveryError("complete workflow history changed a reviewed held run")
+		}
 		if _, err := Exact(run, immutableRunFields, "observed workflow run"); err != nil {
 			return nil, err
 		}
@@ -1193,6 +1244,11 @@ func PendingAttempts(chainValue Object, observed []Object, latest map[int64]int6
 	}
 	if len(seen) != len(latest) {
 		return nil, recoveryError("latest attempt inventory differs from complete workflow history")
+	}
+	for id := range heldRuns {
+		if !seen[id] {
+			return nil, recoveryError("complete workflow history lost a reviewed held run")
+		}
 	}
 	if !currentSeen {
 		return nil, recoveryError("current workflow run is absent from complete history")

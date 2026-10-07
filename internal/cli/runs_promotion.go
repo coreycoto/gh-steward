@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"path/filepath"
+	"strconv"
 
 	"github.com/coreycoto/gh-steward/internal/contract"
 	"github.com/coreycoto/gh-steward/internal/native"
@@ -20,7 +21,7 @@ func (r Runner) runHistoryPromotion(ctx context.Context, args []string) error {
 	out := flags.String("out", "", "private checkout-relative evidence file")
 	format := flags.String("format", "json", "machine output format")
 	var workflow, policy string
-	var inputs, plans, stateReads inputsFlag
+	var inputs, plans, stateReads, heldRuns inputsFlag
 	var artifactID int64
 	var artifactDigest string
 	if action == "promotion-preview" {
@@ -29,6 +30,7 @@ func (r Runner) runHistoryPromotion(ctx context.Context, args []string) error {
 		flags.Var(&inputs, "input", "one reviewed baseline: baseline=FILE")
 		flags.Var(&plans, "plan", "exact future native plan name; repeatable")
 		flags.Var(&stateReads, "state-read", "explicit same-repository reconciliation endpoint; repeatable")
+		flags.Var(&heldRuns, "held-run-id", "exact failed first attempt to qualify using diagnostic upload, executed source and skipped mutators; repeatable")
 		flags.Int64Var(&artifactID, "checkpoint-artifact-id", 0, "optional exact hosted preview checkpoint upload ID")
 		flags.StringVar(&artifactDigest, "checkpoint-artifact-digest", "", "exact hosted preview checkpoint digest")
 	} else {
@@ -42,6 +44,14 @@ func (r Runner) runHistoryPromotion(ctx context.Context, args []string) error {
 	}
 	if action == "promotion-preview" && (*out == "" || len(plans) == 0 || len(stateReads) == 0 || (artifactID == 0) != (artifactDigest == "") || artifactID < 0) {
 		return errors.New("promotion-preview requires --out, explicit plans and state reads; a checkpoint upload needs both exact ID and digest")
+	}
+	heldIDs := make([]int64, len(heldRuns))
+	for i, raw := range heldRuns {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id < 1 || strconv.FormatInt(id, 10) != raw {
+			return errors.New("--held-run-id requires a canonical positive run ID; only first attempts are supported")
+		}
+		heldIDs[i] = id
 	}
 	checkout, repository, err := resolveCheckout(ctx, *root, *repo)
 	if err != nil {
@@ -112,7 +122,7 @@ func (r Runner) runHistoryPromotion(ctx context.Context, args []string) error {
 				return err
 			}
 		}
-		promotion, err = engine.PreviewHistoryPromotion(ctx, reader, baseline, checkpoint, []string(plans), []string(stateReads))
+		promotion, err = engine.PreviewHistoryPromotion(ctx, reader, baseline, checkpoint, []string(plans), []string(stateReads), heldIDs...)
 		if err != nil {
 			return err
 		}
@@ -147,6 +157,14 @@ func (r Runner) runHistoryPromotion(ctx context.Context, args []string) error {
 	data["promotion_schema_version"] = promotion["schema_version"]
 	if exactContract, exists := promotion["state_contract"]; exists {
 		data["state_contract"] = exactContract
+	}
+	if rows, exists := promotion["held_attempts"].([]any); exists {
+		summaries := []any{}
+		for _, raw := range rows {
+			proof := raw.(contract.Object)
+			summaries = append(summaries, contract.Object{"run_id": proof["run"].(contract.Object)["id"], "attempt": proof["attempt"], "disposition": proof["disposition"]})
+		}
+		data["held_attempts"] = summaries
 	}
 	if action == "promotion-preview" {
 		data["validation"] = "complete-live-read-only-promotion-capture"

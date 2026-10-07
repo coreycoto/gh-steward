@@ -47,8 +47,8 @@ hosted schema-6 checkpoint upload with `--checkpoint-artifact-id ID` and
 and verifies that archive from the complete hosted artifact inventory, including
 name, owner run, source SHA, digest and exact native settlement prefix. A local
 checkpoint cannot replace that acquisition. Omitting these flags is accepted
-only when there are no target native artifacts and the baseline exactly covers
-all current runs and attempts.
+only when there are no target native artifacts and the baseline, plus any
+explicitly qualified diagnostic holds described below, covers every current attempt.
 
 Capture preserves the complete preview checkpoint, including any qualified
 native no-op prefix. It rejects uncovered later runs or reruns, partial history,
@@ -83,6 +83,47 @@ Schema-1 promotions remain supported with their original full-response equality.
 They never inherit this contract. CLI 0.5.0 accepts only schema 1; qualify a released
 build containing schema-2 support before capturing or activating a new document.
 The native checkpoint remains schema 7 and embeds the exact promotion unchanged.
+
+### Diagnostic holds after the baseline
+
+A failed first attempt from `workflow_dispatch` or `workflow_run` may stop before
+context initialization and upload only its recovery diagnostic. Source builds
+with schema-3 support can capture its separate positive no-dispatch proof by
+adding `--held-run-id ID` to `promotion-preview` (repeatable; at most 16).
+Selection is explicit; the default still rejects uncovered diagnostic-only runs.
+
+The CLI requires complete idle history, one immutable diagnostic upload with a
+verified ZIP digest, its original manifest and report, GitHub's authenticated
+[`WorkflowRun.file` witness](https://docs.github.com/en/graphql/reference/actions#workflowrunfile)
+with an immutable commit URL, the executed file's exact
+Git blob and content hash, and complete terminal attempt jobs. The source must
+match the trusted `workflow-noop` policy's current or previous exhaustive mutation
+inventory. Every declared mutation job or step must be positively skipped.
+Missing, expired, duplicated, cancelled, started, foreign or competing execution
+evidence holds capture. Both supported diagnostic manifest layouts retain their
+original ZIP bytes; neither is converted to a context, plan, journal or receipt.
+
+The raw schema-3 promotion adds `held_attempts` with disposition
+`diagnostic-only-no-dispatch`. Each selected run must be absent from both the
+original baseline and native preview inventory. Its proof is sealed into the
+same promotion review digest, and source, upload and jobs are checked again during
+capture and first fresh admission. Run identity and terminal status are compared
+explicitly; unrelated mutable repository metadata embedded in that API response
+is retained without being a no-dispatch identity requirement. Workflow source is
+compared by its immutable executed-file witness, Git blob and exact content hash;
+expiring private download URLs are transport metadata and remain privately retained.
+The PR reconciliation
+contract is unchanged. Stdout reports only the selected run IDs and disposition.
+
+Schema 7 keeps this ledger inside the exact promotion, separate from unknown
+quarantine and actual native settlements. The held run cannot become executable
+work, a resumable frontier or a native completion. Its later attempts remain
+uncovered, and trying to run it again holds. Fresh native interruption, journals
+and terminal checkpoint validation retain their ordinary contracts. Once an actual
+native checkpoint exists, its sealed proof can survive diagnostic-upload expiry.
+Old schema-1/2 promotions cannot inherit hold coverage or reuse their approval.
+Qualify a released schema-3 executable and obtain review of the exact new promotion
+and separately authorized activation; source merge alone performs neither.
 
 The preview checkpoint may contain a [compressed large-history baseline](history-archive.md).
 Promotion keeps its complete sealed document and reviewed digest. It does not
@@ -168,6 +209,6 @@ hold, and never replay historical data-bearing operations to obtain green CI.
 A run held before context initialization may have only a diagnostic upload.
 Schema-2 state comparison does not settle that attempt, manufacture a no-op receipt
 or absorb it into the quarantined baseline. Complete history still includes it;
-without a qualified native receipt or an explicit supported reconciliation proof,
+without a qualified native receipt or the explicit schema-3 reconciliation proof,
 subsequent capture and recovery remain held. Deleting a published promotion asset
 does not settle its failed run or undo its recorded revocation.
