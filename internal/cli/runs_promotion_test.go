@@ -78,7 +78,7 @@ func TestPromotionCLISeparatesReadOnlyCaptureAndOfflineValidation(t *testing.T) 
 }
 
 func TestPromotionCLIRequiresReviewableScopeBeforeProviderRead(t *testing.T) {
-	for _, kind := range []string{"missing-out", "missing-plans", "missing-state", "unpaired-artifact", "overlap", "apply-flag", "symlink", "untrusted-actions"} {
+	for _, kind := range []string{"missing-out", "missing-plans", "missing-state", "unpaired-artifact", "overlap", "apply-flag", "symlink", "untrusted-actions", "held-zero", "held-negative", "held-leading-zero", "held-overflow"} {
 		t.Run(kind, func(t *testing.T) {
 			t.Setenv("GITHUB_ACTIONS", "")
 			root := checkout(t)
@@ -110,6 +110,9 @@ func TestPromotionCLIRequiresReviewableScopeBeforeProviderRead(t *testing.T) {
 			}
 			if kind == "apply-flag" {
 				args = append(args, "--apply")
+			}
+			if raw, exists := map[string]string{"held-zero": "0", "held-negative": "-1", "held-leading-zero": "007", "held-overflow": "9223372036854775808"}[kind]; exists {
+				args = append(args, "--held-run-id", raw)
 			}
 			if kind == "untrusted-actions" {
 				t.Setenv("GITHUB_ACTIONS", "true")

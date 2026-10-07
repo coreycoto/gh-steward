@@ -19,6 +19,16 @@ type ActionsReader interface {
 
 type NativeActionsReader struct{ Transport *native.Transport }
 
+// ExecutedWorkflowReader is optional for ordinary recovery. Diagnostic hold
+// qualification requires this authenticated, typed GraphQL source witness.
+type ExecutedWorkflowReader interface {
+	WorkflowRunFile(context.Context, string, int64, string) (Object, error)
+}
+
+func (r NativeActionsReader) WorkflowRunFile(ctx context.Context, workflow string, id int64, nodeID string) (Object, error) {
+	return r.Transport.ReadWorkflowRunFile(ctx, workflow, id, nodeID)
+}
+
 func (r NativeActionsReader) Read(ctx context.Context, endpoint string) (Object, error) {
 	return r.Transport.REST(ctx, "GET", endpoint, nil)
 }
