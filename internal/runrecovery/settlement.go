@@ -287,6 +287,10 @@ func validateAttemptTarget(value any, allowUnknown bool) (Object, error) {
 }
 
 func validateArtifact(value any, target Object, runID, attempt int64) (Object, error) {
+	return validateArtifactName(value, RecoveryArtifactName(target, runID, attempt))
+}
+
+func validateArtifactName(value any, expectedName string) (Object, error) {
 	artifact, err := Exact(value, artifactFields, "settlement artifact identity")
 	if err != nil {
 		return nil, err
@@ -302,7 +306,7 @@ func validateArtifact(value any, target Object, runID, attempt int64) (Object, e
 	if !ok || !settlementArtifactDigest.MatchString(digest) {
 		return nil, recoveryError("settlement artifact digest is invalid")
 	}
-	if name != RecoveryArtifactName(target, runID, attempt) {
+	if name != expectedName {
 		return nil, recoveryError("settlement artifact name differs from its exact workflow attempt")
 	}
 	return artifact, nil
@@ -546,9 +550,22 @@ func (e *Engine) ValidateSettlementRecord(value any, targetValue any) (Object, e
 	if err != nil {
 		return nil, err
 	}
+	settlement, err := object(record["settlement"], "settlement evidence")
+	if err != nil {
+		return nil, err
+	}
+	kind, ok := settlement["kind"].(string)
+	if !ok {
+		return nil, recoveryError("settlement evidence lacks a typed kind")
+	}
 	var artifact Object
 	if record["artifact"] != nil {
-		artifact, err = validateArtifact(record["artifact"], target, runID, attempt)
+		name := RecoveryArtifactName(target, runID, attempt)
+		identity, _ := object(record["artifact"], "artifact")
+		if kind == "undispatched_noop" && identity["name"] == name+"-handoff-00" {
+			name += "-handoff-00"
+		}
+		artifact, err = validateArtifactName(record["artifact"], name)
 		if err != nil {
 			return nil, err
 		}
@@ -558,15 +575,14 @@ func (e *Engine) ValidateSettlementRecord(value any, targetValue any) (Object, e
 			return nil, err
 		}
 	}
-	settlement, err := object(record["settlement"], "settlement evidence")
-	if err != nil {
-		return nil, err
-	}
-	kind, ok := settlement["kind"].(string)
-	if !ok {
-		return nil, recoveryError("settlement evidence lacks a typed kind")
-	}
 	switch kind {
+	case "undispatched_noop":
+		if artifact == nil || record["context_file"] == nil || attemptTarget["recovery_key"] == nil {
+			return nil, recoveryError("undispatched no-op needs its exact artifact, original context and attempt target")
+		}
+		if err := e.validateUndispatchedNoop(record, target); err != nil {
+			return nil, err
+		}
 	case "terminal":
 		if artifact == nil || record["context_file"] == nil || attemptTarget["recovery_key"] == nil {
 			return nil, recoveryError("terminal settlement needs its exact artifact, context and attempt target")

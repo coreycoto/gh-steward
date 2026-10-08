@@ -8,6 +8,21 @@ When `GITHUB_ACTIONS=true`, the CLI checks that the control checkout HEAD equals
 
 `--package-root` must identify a real direct child of `--runner-temp` (default `RUNNER_TEMP`). Recovery and handoff create an empty package; context commands operate on that existing directory. A journal root points to the native engine's checkout-local `.artifacts/gh-steward/journals/`. An existing different journal is a hold.
 
+## Interrupted no-op
+
+CLI 0.6.1 can reconcile a prepared, plan-free native no-op whose completion job
+failed before writing a native result. Recovery requires its unique original
+package, or its exact `-handoff-00` upload when no final package exists, the
+retained decision and event, its immutable predecessor prefix, and complete job
+reads proving every declared mutation was skipped under explicitly retained
+workflow source. The control source must equal that historical run's head.
+
+The checkpoint records `undispatched_noop`, preserving the original prepared
+context. It does not claim completed business work or create a historical plan,
+journal or receipt. Missing, expired, duplicate, partial or dispatched evidence
+remains held. Generic handoffs cannot recover unknown writes. Upgrade consumers
+to 0.6.1 before using checkpoints containing this new fact.
+
 ## Command boundaries
 
 `runs recover` needs `--workflow`, `--run-id`, `--attempt`, `--run-name`, `--recovery-key`, and `--package-root`. It reads complete workflow history and artifacts, then persists a settlement frontier, restored source, or typed hold. A resumed source must have either positive durable native dispatch identity or a verified current-source `prepared-qualification.json` proving that every exact mutation-capable step was skipped. A prepared-only legacy source without that qualification remains held. Recovery never replays a provider write.

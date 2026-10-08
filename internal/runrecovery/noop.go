@@ -488,111 +488,124 @@ func (e *Engine) validateWorkflowNoop(runContext, entry, plan Object, reader *po
 	if err != nil || data["status"] != "completed" {
 		return errors.New("workflow no-op data is not terminal")
 	}
-	wf, err := e.workflowPolicy(fmt.Sprint(runContext["workflow_file"]))
+	expectedSources, err := e.validateNoopEvidence(runContext, data, reader)
 	if err != nil {
 		return err
 	}
+	if !Equal(plan["sources"], expectedSources) {
+		return errors.New("no-op source provenance differs from its retained proof bytes")
+	}
+	return nil
+}
+
+// validateNoopEvidence is shared by native terminal no-ops and a distinct
+// reconciliation fact for an interrupted, positively undispatched no-op.
+func (e *Engine) validateNoopEvidence(runContext, data Object, reader *policyReader) (Object, error) {
+	wf, err := e.workflowPolicy(fmt.Sprint(runContext["workflow_file"]))
+	if err != nil {
+		return nil, err
+	}
 	policy := wf.plans["workflow-noop"].approval.noop
 	if policy == nil {
-		return errors.New("workflow no-op has no exhaustive source policy")
+		return nil, errors.New("workflow no-op has no exhaustive source policy")
 	}
 	if source, ok := data["workflow_source_sha256"].(string); ok && source != policy.sourceSHA256 {
 		policy = policy.previous[source]
 		if policy == nil {
-			return errors.New("historical no-op source has not been explicitly retained as qualified")
+			return nil, errors.New("historical no-op source has not been explicitly retained as qualified")
 		}
 	}
 	workflowSource, sourceBytes, err := reader.read("events/workflow-source.json", "current no-op workflow source")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if data["workflow_source_sha256"] != policy.sourceSHA256 || data["workflow_api_sha256"] != SHA256(sourceBytes) {
-		return errors.New("no-op workflow source witness differs")
+		return nil, errors.New("no-op workflow source witness differs")
 	}
 	if err := validateNoopWorkflowSource(workflowSource, fmt.Sprint(runContext["workflow_file"]), policy.sourceSHA256); err != nil {
-		return err
+		return nil, err
 	}
 	jobs, jobsBytes, err := reader.read("events/current-jobs.json", "current no-op jobs")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if data["jobs_sha256"] != SHA256(jobsBytes) {
-		return errors.New("no-op jobs witness differs")
+		return nil, errors.New("no-op jobs witness differs")
 	}
 	decision, decisionBytes, err := reader.read(noopDecisionPath, "workflow no-op decision")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	decision, err = exactWithOptional(decision, noopDecisionFields, []string{"proposal", "previews"}, "workflow no-op decision")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	event, eventBytes, err := reader.read("events/trigger-event.json", "workflow no-op event")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	observation, observationBytes, err := reader.read("recovery-observation.json", "workflow no-op history observation")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	observation, err = Exact(observation, noopObservationFields, "workflow no-op history observation")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	target, err := e.validateTarget(observation["target"])
 	if err != nil {
-		return err
+		return nil, err
 	}
 	run, err := Exact(observation["run"], immutableRunFields, "workflow no-op source run")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	runID, err := positiveInteger(runContext["workflow_run_id"], "no-op run ID")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	attempt, err := positiveInteger(runContext["workflow_run_attempt"], "no-op attempt")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := validateNoopJobs(jobs, policy, runID, attempt); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := validateRunIdentity(run, runID, attempt, target); err != nil {
-		return err
+		return nil, err
 	}
 	name, ok := decision["decision"].(string)
 	if !ok || !noopDecisions[name] || !exactInt(decision["schema_version"], 1) || !exactInt(observation["schema_version"], 1) {
-		return errors.New("workflow no-op decision is unsupported")
+		return nil, errors.New("workflow no-op decision is unsupported")
 	}
 	if !Equal(data["proposal"], decision["proposal"]) {
-		return errors.New("workflow no-op changed its inert candidate evidence")
+		return nil, errors.New("workflow no-op changed its inert candidate evidence")
 	}
 	if !Equal(data["previews"], decision["previews"]) {
-		return errors.New("workflow no-op changed its inert preview document inventory")
+		return nil, errors.New("workflow no-op changed its inert preview document inventory")
 	}
 	previews, err := noopPreviewReferences(decision)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	outcome := observation["outcome"]
 	if (outcome != "fresh" && outcome != "terminal") || (outcome == "terminal" && name != "already-settled") || (outcome == "fresh" && name == "already-settled") {
-		return errors.New("workflow no-op decision is not allowed for this exact recovery outcome")
+		return nil, errors.New("workflow no-op decision is not allowed for this exact recovery outcome")
 	}
 	if outcome == "terminal" && attempt <= 1 {
-		return errors.New("settled-observer no-op requires an exact rerun")
+		return nil, errors.New("settled-observer no-op requires an exact rerun")
 	}
 	emptyFrontierDigest, err := preparedFrontierDigest([]any{})
 	if err != nil || observation["prepared_frontier_sha256"] != emptyFrontierDigest ||
 		!IsSHA256(observation["chain_sha256"]) || data["chain_sha256"] != observation["chain_sha256"] || data["observation_sha256"] != SHA256(observationBytes) || data["event_sha256"] != SHA256(eventBytes) || data["decision_sha256"] != SHA256(decisionBytes) {
-		return errors.New("workflow no-op did not retain exact decision, event and predecessor proof bytes")
+		return nil, errors.New("workflow no-op did not retain exact decision, event and predecessor proof bytes")
 	}
 	if target["workflow_file"] != runContext["workflow_file"] || run["display_title"] != runContext["run_name"] || run["event"] != data["event_name"] || runContext["trusted_source_sha"] != data["workflow_sha"] || !settlementSHA40.MatchString(fmt.Sprint(data["workflow_sha"])) {
-		return errors.New("workflow no-op differs from the exact control source or invocation")
+		return nil, errors.New("workflow no-op differs from the exact control source or invocation")
 	}
 	for _, field := range []string{"workflow_file", "recovery_key", "attempt_target"} {
 		if !Equal(data[field], runContext[field]) || !Equal(decision[field], runContext[field]) {
-			return errors.New("workflow no-op changes its exact target")
+			return nil, errors.New("workflow no-op changes its exact target")
 		}
 	}
 	for _, pair := range []struct {
@@ -600,18 +613,18 @@ func (e *Engine) validateWorkflowNoop(runContext, entry, plan Object, reader *po
 		value any
 	}{{"run_id", runID}, {"attempt", attempt}, {"workflow_sha", data["workflow_sha"]}, {"event_name", data["event_name"]}, {"event_sha256", data["event_sha256"]}} {
 		if !Equal(decision[pair.field], pair.value) || !Equal(data[pair.field], pair.value) {
-			return errors.New("workflow no-op decision identity differs from its terminal plan")
+			return nil, errors.New("workflow no-op decision identity differs from its terminal plan")
 		}
 	}
 	if !exactInt(observation["run_id"], runID) || !exactInt(observation["attempt"], attempt) || observation["recovery_key"] != runContext["recovery_key"] || data["decision"] != name || data["recovery_outcome"] != outcome || decision["repository"] != e.repository.FullName() || decision["server_url"] != "https://"+e.repository.Host {
-		return errors.New("workflow no-op decision belongs to another exact invocation")
+		return nil, errors.New("workflow no-op decision belongs to another exact invocation")
 	}
 	repository, err := object(event["repository"], "no-op trigger repository")
 	if err != nil || repository["full_name"] != e.repository.FullName() {
-		return errors.New("no-op trigger event belongs to another repository")
+		return nil, errors.New("no-op trigger event belongs to another repository")
 	}
 	if htmlURL, exists := repository["html_url"]; exists && htmlURL != e.repository.URL {
-		return errors.New("no-op trigger event repository host differs")
+		return nil, errors.New("no-op trigger event repository host differs")
 	}
 	expectedSources := Object{}
 	for source, digest := range map[string]string{"decision": SHA256(decisionBytes), "event": SHA256(eventBytes), "history": SHA256(observationBytes), "workflow": SHA256(sourceBytes), "jobs": SHA256(jobsBytes)} {
@@ -620,16 +633,16 @@ func (e *Engine) validateWorkflowNoop(runContext, entry, plan Object, reader *po
 	if decision["proposal"] != nil {
 		proposal, err := Exact(decision["proposal"], []string{"candidate_sha256", "review_sha256"}, "declined inert proposal")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if name != "review-declined" && name != "no-change" {
-			return errors.New("inert proposal is outside a declined or empty candidate decision")
+			return nil, errors.New("inert proposal is outside a declined or empty candidate decision")
 		}
 		if name == "review-declined" && !IsSHA256(proposal["review_sha256"]) {
-			return errors.New("negative review lost its exact raw review digest")
+			return nil, errors.New("negative review lost its exact raw review digest")
 		}
 		if name == "no-change" && proposal["review_sha256"] != nil {
-			return errors.New("empty native candidate must not invent a review approval")
+			return nil, errors.New("empty native candidate must not invent a review approval")
 		}
 		for _, source := range []string{"candidate", "review"} {
 			if source == "review" && proposal["review_sha256"] == nil {
@@ -637,44 +650,41 @@ func (e *Engine) validateWorkflowNoop(runContext, entry, plan Object, reader *po
 			}
 			value, raw, err := reader.read("proposals/"+source+".json", "declined proposal "+source)
 			if err != nil || proposal[source+"_sha256"] != SHA256(raw) {
-				return errors.New("declined proposal lost its exact candidate or review bytes")
+				return nil, errors.New("declined proposal lost its exact candidate or review bytes")
 			}
 			if source == "review" && !contains([]string{"noop", "blocked", "declined", "rejected"}, fmt.Sprint(value["status"])) {
-				return errors.New("inert proposal review is not an explicit negative decision")
+				return nil, errors.New("inert proposal review is not an explicit negative decision")
 			}
 			if source == "candidate" && name == "no-change" {
 				candidate, err := contract.ParsePlan(value)
 				if err != nil || candidate.Repository != e.repository {
-					return errors.New("inert candidate is not a valid native v2 plan for this repository")
+					return nil, errors.New("inert candidate is not a valid native v2 plan for this repository")
 				}
 				if len(candidate.Operations) != 0 {
-					return errors.New("no-change candidate is not an empty native plan")
+					return nil, errors.New("no-change candidate is not an empty native plan")
 				}
 			}
 			expectedSources[source] = Object{"live": true, "complete": true, "sha256": SHA256(raw)}
 		}
 	} else if name == "review-declined" {
-		return errors.New("declined decision lost its inert proposal evidence")
+		return nil, errors.New("declined decision lost its inert proposal evidence")
 	}
 	for index, ref := range previews {
 		value, raw, err := reader.read(ref["path"].(string), "inert preview document")
 		if err != nil || len(value) == 0 || ref["sha256"] != SHA256(raw) {
-			return errors.New("preview document lost its exact nonempty JSON object bytes")
+			return nil, errors.New("preview document lost its exact nonempty JSON object bytes")
 		}
 		_, hasNativeOperations := value["operations"]
 		_, hasNativeCommand := value["command"]
 		if exactInt(value["schema_version"], 2) && (hasNativeOperations || hasNativeCommand) {
 			candidate, err := contract.ParsePlan(value)
 			if err != nil || candidate.Repository != e.repository {
-				return errors.New("inert native preview plan is invalid or belongs to another repository")
+				return nil, errors.New("inert native preview plan is invalid or belongs to another repository")
 			}
 		}
 		expectedSources[fmt.Sprintf("preview-%d", index)] = Object{"live": true, "complete": true, "sha256": SHA256(raw)}
 	}
-	if !Equal(plan["sources"], expectedSources) {
-		return errors.New("no-op source provenance differs from its retained proof bytes")
-	}
-	return nil
+	return expectedSources, nil
 }
 
 // validateNoopFrontier binds each no-op to the immutable prefix preceding it.
@@ -683,6 +693,17 @@ func validateNoopFrontier(record Object, prefix []any) error {
 	settled, err := object(record["settlement"], "settlement")
 	if err != nil {
 		return err
+	}
+	if settled["kind"] == "undispatched_noop" {
+		original, err := undispatchedNoopPrefix(record)
+		if err != nil {
+			return err
+		}
+		digest, err := settlementPrefixDigest(prefix)
+		if err != nil || original != digest {
+			return errors.New("undispatched no-op predecessor prefix differs from the settled chain")
+		}
+		return nil
 	}
 	if settled["kind"] != "terminal" {
 		return nil

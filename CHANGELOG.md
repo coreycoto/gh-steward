@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.6.0 — Unreleased
+## 0.6.1 — Unreleased
+
+- Reconcile an interrupted native no-op from its original prepared package or pre-dispatch handoff only after verifying the exact source and complete positively skipped mutation jobs. Retain a distinct `undispatched_noop` fact; never invent a completed plan, journal or business receipt.
+- Preserve the original context, decision, artifact and predecessor prefix. Missing or ambiguous evidence, excluded legacy history, dispatched work and unknown writes remain held. No manual recovery metadata publication or additional review artifact is required.
+
+## 0.6.0 — 2026-10-08
 
 - Replace legacy imports, sealed baselines, promotion reviews and compressed migration archives with one optional reviewed `history_start` in repository policy. No recovery metadata release or runtime history-document input is required.
 - Exclude old runs without claiming they completed or replaying their operations. Preserve exact automatic journals, native approvals, interrupted-write reconciliation, job handoffs and verified checkpoints for new runs.
