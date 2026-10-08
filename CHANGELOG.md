@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.6.1 — Unreleased
+## 0.6.2 — Unreleased
+
+- Automatically reconcile a recovery invocation that stopped with only its original diagnostic manifest and report. Require its exact artifact, GitHub's authenticated executed-workflow witness, qualified exhaustive source and complete positively skipped mutation jobs. Retain an `undispatched_hold` fact without inventing a context, plan, journal or completed operation.
+- Keep earlier unresolved attempts blocking. Missing, expired, duplicate, dispatched and unqualified diagnostic evidence stays held; no additional command, policy setting or manual recovery artifact is required.
+
+## 0.6.1 — 2026-10-08
 
 - Reconcile an interrupted native no-op from its original prepared package or pre-dispatch handoff only after verifying the exact source and complete positively skipped mutation jobs. Retain a distinct `undispatched_noop` fact; never invent a completed plan, journal or business receipt.
 - Preserve the original context, decision, artifact and predecessor prefix. Missing or ambiguous evidence, excluded legacy history, dispatched work and unknown writes remain held. No manual recovery metadata publication or additional review artifact is required.
