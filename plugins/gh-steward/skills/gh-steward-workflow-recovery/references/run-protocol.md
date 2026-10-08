@@ -23,6 +23,15 @@ journal or receipt. Missing, expired, duplicate, partial or dispatched evidence
 remains held. Generic handoffs cannot recover unknown writes. Upgrade consumers
 to 0.6.1 before using checkpoints containing this new fact.
 
+CLI 0.6.2 can also reconcile a later invocation that stopped during recovery
+with only an original diagnostic manifest and report. It requires the exact
+diagnostic ZIP, an authenticated executed-workflow witness, explicitly qualified
+exhaustive workflow source and complete jobs proving every mutation was skipped.
+The checkpoint records `undispatched_hold` with no invented context, plan,
+journal or completed operation. Earlier unresolved attempts still block;
+recovery does not skip them because a later invocation stopped. Upgrade consumers
+to 0.6.2 before using checkpoints containing this fact.
+
 ## Command boundaries
 
 `runs recover` needs `--workflow`, `--run-id`, `--attempt`, `--run-name`, `--recovery-key`, and `--package-root`. It reads complete workflow history and artifacts, then persists a settlement frontier, restored source, or typed hold. A resumed source must have either positive durable native dispatch identity or a verified current-source `prepared-qualification.json` proving that every exact mutation-capable step was skipped. A prepared-only legacy source without that qualification remains held. Recovery never replays a provider write.

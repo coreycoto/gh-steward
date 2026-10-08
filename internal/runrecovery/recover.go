@@ -498,6 +498,17 @@ func (e *Engine) Recover(ctx context.Context, reader ActionsReader, invocation I
 			}
 		}
 		if metadata == nil {
+			name = diagnosticArtifactName(target, runID, attempt)
+			for _, candidate := range allArtifacts {
+				if candidate["name"] == name {
+					if metadata != nil {
+						return hold(errors.New("earliest unsettled attempt has duplicated recovery diagnostics"))
+					}
+					metadata = candidate
+				}
+			}
+		}
+		if metadata == nil {
 			return hold(errors.New("earliest unsettled attempt has no unique exact recovery artifact"))
 		}
 		artifact, err := artifactIdentity(metadata, name, runID)
@@ -517,7 +528,14 @@ func (e *Engine) Recover(ctx context.Context, reader ActionsReader, invocation I
 		if historicalCount > MaxCheckpointArtifacts || historicalBytes > MaxHistoryAcquisitionBytes {
 			return hold(errors.New("normal recovery acquisition exceeds its aggregate history budget"))
 		}
-		inspected, err := e.inspectHistoricalPackage(ctx, reader, invocation, runs, run, target, artifact, attempt, payload, len(frontier) > 0)
+		var inspected Object
+		if name == diagnosticArtifactName(target, runID, attempt) {
+			var record Object
+			record, err = e.undispatchedHoldRecord(ctx, reader, run, runPacket, target, artifact, attempt, payload)
+			inspected = Object{"kind": "terminal", "record": record}
+		} else {
+			inspected, err = e.inspectHistoricalPackage(ctx, reader, invocation, runs, run, target, artifact, attempt, payload, len(frontier) > 0)
+		}
 		if err != nil {
 			return hold(err)
 		}

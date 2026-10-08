@@ -565,6 +565,9 @@ func (e *Engine) ValidateSettlementRecord(value any, targetValue any) (Object, e
 		if kind == "undispatched_noop" && identity["name"] == name+"-handoff-00" {
 			name += "-handoff-00"
 		}
+		if kind == "undispatched_hold" {
+			name = diagnosticArtifactName(target, runID, attempt)
+		}
 		artifact, err = validateArtifactName(record["artifact"], name)
 		if err != nil {
 			return nil, err
@@ -576,6 +579,13 @@ func (e *Engine) ValidateSettlementRecord(value any, targetValue any) (Object, e
 		}
 	}
 	switch kind {
+	case "undispatched_hold":
+		if artifact == nil || attemptTarget["recovery_key"] == nil {
+			return nil, recoveryError("recovery hold needs its exact original artifact and event target")
+		}
+		if err := e.validateUndispatchedHold(record, target); err != nil {
+			return nil, err
+		}
 	case "undispatched_noop":
 		if artifact == nil || record["context_file"] == nil || attemptTarget["recovery_key"] == nil {
 			return nil, recoveryError("undispatched no-op needs its exact artifact, original context and attempt target")
