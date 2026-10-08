@@ -49,13 +49,6 @@ func (e *Engine) QualifyPrepared(ctx context.Context, reader ActionsReader, opti
 	if err != nil {
 		return nil, err
 	}
-	cutover, err := e.previewOnlyCutoverAtRoot(root, options.Workflow)
-	if err != nil {
-		return nil, err
-	}
-	if cutover {
-		return nil, errors.New("preview-only history cutover cannot qualify executable plans for recovery")
-	}
 	if err := e.validateRunContext(contextValue); err != nil {
 		return nil, err
 	}
@@ -824,20 +817,9 @@ func (e *Engine) validatePreparedSourceRecord(value any, target Object) (Object,
 
 func validatePreparedObservation(value any, invocation Invocation, target, run, chain Object) error {
 	fields := []string{"schema_version", "outcome", "target", "run", "run_id", "attempt", "recovery_key", "chain_sha256", "prepared_frontier_sha256"}
-	observation, err := exactWithOptional(value, fields, []string{noopHistoryCutoverDigestField}, "prepared recovery observation")
+	observation, err := Exact(value, fields, "prepared recovery observation")
 	if err != nil {
 		return err
-	}
-	var cutoverDigest any
-	if isHistoryCutoverChain(chain) {
-		baseline, err := historyCutoverFromChain(chain)
-		if err != nil {
-			return err
-		}
-		cutoverDigest = baseline["sha256"]
-	}
-	if !Equal(observation[noopHistoryCutoverDigestField], cutoverDigest) {
-		return errors.New("prepared recovery observation lost its quarantined history identity")
 	}
 	settled, err := settlementPrefixDigest(chain["settlements"])
 	if err != nil {

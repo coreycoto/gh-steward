@@ -34,17 +34,23 @@ Every command returns the native schema-version 2 machine envelope. `--github-ou
 
 The strict policy has `schema_version: 1` and a `workflows` map keyed by exact `.yml` or `.yaml` filenames. Each workflow contains `mutator_step_alternatives`, empty `reviewed_source_shas`, boolean `allow_publication`, and a `plans` map. Each plan declares `command`, `domain_profile`, `allowed_operation_kinds`, `attempt_target`, `approval`, `event`, and nullable `parent_merge`. Unsupported fields, profiles, or approval contracts are rejected. This is data; it cannot execute consumer code. Keep `reviewed_source_shas` empty: historical source qualification from a run's code head is unsupported.
 
-Use a stable whole-workflow concurrency group with `cancel-in-progress: false` and scalar `queue: max`. The default single pending slot discards waiting invocations before receipt persistence. GitHub permits up to 100 pending runs and cancels overflow; queue order is based on when runs start waiting, not guaranteed dispatch order. Canceled or out-of-order predecessors remain visible and held without positive settlement evidence. Never turn queue cancellation into a no-write receipt or truncate history to clear it.
+Use a stable whole-workflow concurrency group with `cancel-in-progress: false` and scalar `queue: max`. The default single pending slot discards waiting invocations before receipt persistence. GitHub permits up to 100 pending runs and cancels overflow; queue order is based on when runs start waiting, not guaranteed dispatch order. Canceled or out-of-order predecessors remain visible and held without positive settlement evidence. Never turn queue cancellation into a no-write receipt or advance the adopted history start to clear it.
 
 Current no-op approval uses `kind: local-noop`, `workflow_source_sha256` (the raw trusted workflow file hash), and `mutators`, an exhaustive array of exact job display names and mutation-capable step names. Native plan entries may independently declare `prepared_recovery` with `workflow_source_sha256` and an exhaustive `mutators` inventory for that plan. Every pending plan being qualified must resolve to the same raw workflow digest. When changing a source, retain the prior hash and exact inventory in optional `previous_sources`, an array of objects with exactly `workflow_source_sha256` and `mutators`. Prior entries validate retained positive evidence only; they cannot qualify a new invocation under old source or classify legacy attempts. No-op evidence and prepared native plan evidence use separate policy entries and separate finalization paths.
 
-## Optional unknown-history boundary
+## Optional history start
 
-CLI 0.4.0 supports a separately reviewed, preview-only `history_cutover` in chain schema 6. It preserves a complete legacy inventory with unknown outcomes outside the native settlement list. It never substitutes an age cutoff for evidence or imports a fabricated native result. Default schema-4/5 recovery remains strict. Read [history-cutover.md](history-cutover.md) for capture, independent review, revocation, scope and immutable-prefix contracts. Native current-run no-op evidence still follows the rules below.
+CLI 0.6.0 supports one optional `history_start` workflow-policy field. It is the
+immutable identity of the last excluded terminal run. All older outcomes remain
+unknown; they never become native completion records. Read
+[history-start.md](history-start.md) for the exact shape and adoption contract.
 
-CLI 0.5.0 supports schema 7 for [explicit fresh-native promotion](history-promotion.md). Its `history_promotion` embeds the exact schema-6 preview checkpoint and a separately reviewed selected native scope. It preserves the preview's native prefix and quarantined baseline; it does not copy old unknown attempts into native settlements. Publication is excluded. Every native attempt continues to require the complete ordinary policy, acquisition, before-state, approval, journal, prepared frontier and terminal proof contracts. Review and policy drift hold work, including context commands in opted-in workflows.
-
-Large captures can use [baseline schema 2](history-archive.md) inside schema-6/7 checkpoints. This preserves a bounded compressed stream of complete raw records, not a summary of history. The outer baseline digest remains the review identity through current no-op receipts and fresh-process checkpoint acquisition. File/checkpoint, complete-inventory, immutable-prefix, active-attempt and native-lineage guards remain in force.
+Default schema-4 recovery keeps its complete-history requirements. A policy with
+`history_start` writes schema-8 checkpoints containing that same identity and
+validates complete native history after it. Checkpoint/policy mismatches hold work.
+Every new attempt still uses the ordinary approval, journal, handoff, prepared
+frontier and terminal proof contracts below. There are no import or promotion
+commands, review issues, baseline archives or runtime history-document inputs.
 
 ## Current no-op evidence
 
@@ -77,4 +83,4 @@ Invoke `finish-noop` only after all mutation-capable jobs report positively skip
 
 Archives permit at most 32 MiB compressed data, 1,000 entries, and 8 MiB per retained file; reject symlinks, traversal, duplicates, extra uploaded files, and changed bytes. A publication candidate ZIP is retained as one file and therefore also obeys the 8 MiB file limit. Cumulative checkpoint and normal recovery acquisition each stop at 1,024 artifacts or 256 MiB. A limit never creates a history cutoff. Retain the typed hold and positively settled prefix. Authenticated checkpoint compaction is a future capability.
 
-Legacy attempts without native terminal receipts or authenticated source proof remain unresolved. Report that limit separately from qualification of the new implementation. Do not delete historical runs, add source allowlists, fabricate acknowledgements, or widen credentials as recovery shortcuts.
+Attempts inside the configured scope without native terminal receipts or authenticated source proof remain unresolved. Report that limit separately from qualification of the new implementation. Do not delete historical runs, add source allowlists, fabricate acknowledgements, or widen credentials as recovery shortcuts.

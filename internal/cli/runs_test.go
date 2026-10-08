@@ -176,6 +176,18 @@ func TestActionsRecoveryRequiresExactControlCheckoutAndCommittedPolicy(t *testin
 
 type noRecoveryProviderReads struct{ t *testing.T }
 
+func TestRetiredHistoryCommandsRejectWithoutProviderReads(t *testing.T) {
+	for _, action := range []string{"legacy-review", "legacy-import-preview", "import-legacy", "cutover-preview", "cutover-validate", "promotion-preview", "promotion-validate"} {
+		t.Run(action, func(t *testing.T) {
+			var out, stderr bytes.Buffer
+			err := (Runner{Out: &out, Err: &stderr, Actions: noRecoveryProviderReads{t: t}}).Run(context.Background(), []string{"runs", action, "--repo-root", checkout(t)})
+			if err == nil || out.Len() != 0 {
+				t.Fatal("retired migration command returned success", err, out.String())
+			}
+		})
+	}
+}
+
 func (r noRecoveryProviderReads) Read(context.Context, string) (contract.Object, error) {
 	r.t.Fatal("local or pending recovery command made a provider read")
 	return nil, nil

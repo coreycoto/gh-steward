@@ -145,3 +145,26 @@ func downloadArtifact(ctx context.Context, reader ActionsReader, artifact Object
 	}
 	return data, nil
 }
+
+func objectRows(rows []Object) []any {
+	result := make([]any, len(rows))
+	for index := range rows {
+		result[index] = rows[index]
+	}
+	return result
+}
+
+func objectArray(value any, name string) ([]Object, error) {
+	rows, err := array(value, name)
+	if err != nil {
+		return nil, err
+	}
+	objects := make([]Object, len(rows))
+	for index, raw := range rows {
+		objects[index], err = object(raw, name+" row")
+		if err != nil {
+			return nil, err
+		}
+	}
+	return objects, nil
+}

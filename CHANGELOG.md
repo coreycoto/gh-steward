@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0 — Unreleased
+
+- Replace legacy imports, sealed baselines, promotion reviews and compressed migration archives with one optional reviewed `history_start` in repository policy. No recovery metadata release or runtime history-document input is required.
+- Exclude old runs without claiming they completed or replaying their operations. Preserve exact automatic journals, native approvals, interrupted-write reconciliation, job handoffs and verified checkpoints for new runs.
+- Use schema-8 checkpoints for scoped history and reject changed boundaries or attempts to advance past existing native checkpoints. Default schema-4 recovery remains strict. Older CLI versions and schema-5/6/7 migration formats cannot activate the new policy.
+
 ## 0.5.2 — Unreleased
 
 - Capture new promotions with a versioned PR repository bookkeeping projection. Validate and retain complete raw timestamps and numeric storage/social/issue statistics while excluding those fields from admission equality. Preserve strict comparison of PR behavior, repository identities, ownership, security settings, refs, commit IDs and unknown fields.

@@ -40,6 +40,7 @@ type preparedLifecycle struct {
 	workflowSHA  string
 	artifacts    []Object
 	nextArtifact int64
+	excludedRun  Object
 }
 
 func newPreparedLifecycle(t *testing.T, operationCount int) *preparedLifecycle {
@@ -141,7 +142,11 @@ func (fixture *preparedLifecycle) setAttempt(attempt int64, current bool) Object
 		run["status"], run["conclusion"] = "completed", "failure"
 	}
 	runsEndpoint := fmt.Sprintf("repos/%s/actions/workflows/%s/runs?per_page=100", fixture.repository.FullName(), preparedLifecycleWorkflow)
-	fixture.reader.pages[runsEndpoint] = []any{Object{"total_count": int64(1), "workflow_runs": []any{run}}}
+	runs := []any{run}
+	if fixture.excludedRun != nil {
+		runs = append(runs, fixture.excludedRun)
+	}
+	fixture.reader.pages[runsEndpoint] = []any{Object{"total_count": int64(len(runs)), "workflow_runs": runs}}
 	fixture.reader.pages[fmt.Sprintf("repos/%s/actions/artifacts?per_page=100", fixture.repository.FullName())] = []any{Object{
 		"total_count": int64(len(fixture.artifacts)), "artifacts": append([]any{}, objectsFrom(fixture.artifacts)...),
 	}}
@@ -931,7 +936,32 @@ func mustObserved(t *testing.T, engine *Engine, reader *recoveryReaderFixture, i
 }
 
 func TestPreparedFrontierPartialAcknowledgementResumesWithoutRedispatch(t *testing.T) {
+	testPartialAcknowledgementResumesWithoutRedispatch(t, false)
+}
+
+func TestScopedHistoryPartialAcknowledgementResumesWithoutRedispatch(t *testing.T) {
+	testPartialAcknowledgementResumesWithoutRedispatch(t, true)
+}
+
+func testPartialAcknowledgementResumesWithoutRedispatch(t *testing.T, scoped bool) {
 	fixture := newPreparedLifecycle(t, 2)
+	if scoped {
+		fixture.excludedRun = recoveryHistoryRun(1, 3, "Unknown historical run")
+		value, err := DecodeValue(fixture.policyBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start, err := NormalizeRun(fixture.excludedRun)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value.(Object)["workflows"].(Object)[preparedLifecycleWorkflow].(Object)["history_start"] = start
+		fixture.policyBytes, err = Canonical(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.engine = fixture.newProcessEngine(t)
+	}
 	rootTemp1 := t.TempDir()
 	inv1 := fixture.invocation(1, rootTemp1)
 	fixture.setAttempt(1, true)

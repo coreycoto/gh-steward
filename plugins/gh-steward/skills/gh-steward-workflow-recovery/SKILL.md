@@ -1,45 +1,39 @@
 ---
 name: gh-steward-workflow-recovery
-description: Integrate or diagnose gh-steward recovery across GitHub Actions attempts and isolated jobs, including exact handoffs, durable checkpoints, reviewed legacy imports, quarantined history and separately reviewed fresh-native promotion.
+description: Integrate or diagnose interrupted GitHub Actions operations using native plans, automatic journals and run artifacts, with one reviewed configuration boundary for old workflow history.
 ---
 
-Use the native `gh steward runs` commands for shared recovery mechanics. Keep consumer-specific approval, event, and domain policy in the trusted checkout; keep shell adapters thin. Read [the protocol reference](references/run-protocol.md) when implementing a workflow or interpreting a held package.
+Use the native `gh steward runs` commands for recovery. Keep the workflow's plan,
+approval and event policy in the trusted checkout and shell adapters thin. Read
+[the protocol](references/run-protocol.md) when implementing an adapter.
 
-Confirm the staged executable's release version, source revision, clean-source flag, checksum, and provenance before using it. The `runs` commands shipped in 0.2.0; 0.1.0 does not support them. Installing this plugin does not install the CLI or authorize writes.
+Verify the staged executable's pinned source, release checksum and provenance.
+Installing the plugin does not install the executable or authorize GitHub writes.
 
-Treat the recovery outcomes distinctly:
+Use the reported outcome:
 
-- `fresh`: every prior exact attempt is positively settled under the default protocol. With an explicitly reviewed schema-6 cutover, this refers only to the native suffix: quarantined old attempts remain unknown and only read-only preview work may proceed.
-- `resumed`: continue only the retained exact source target and native journals. Completed operations stay complete; the apply engine must positively reconcile unknown writes.
-- `terminal`: the rerun predecessor is settled. Preserve the frontier and finish this observer without preparing a new target.
-- `recovery_needed`: retain the reason and all evidence in a separate diagnostic artifact even when the guard fails. Missing artifacts, old SDK output, and skipped legacy step names do not prove absence of writes. A diagnostic report is not a settlement or checkpoint.
+- `fresh`: no unsettled attempt exists within the configured history scope.
+- `resumed`: continue the exact retained operation with its original plan and journal.
+- `terminal`: the rerun predecessor is settled; do not prepare another target.
+- `recovery_needed`: preserve the evidence and explain the unresolved operation.
 
-Use the trusted control checkout and actual runtime `GITHUB_WORKFLOW_SHA` for policy and publication qualification. Run untrusted source or candidate verification in isolated jobs without mutation credentials. Transfer one final preparation artifact by exact upload ID and digest; acquire it in the consuming job before use. Choose default `apply` for native plans and `transport` for evidence-only or publication packages.
+The apply engine automatically journals writes. An uncertain result must be
+positively reconciled before continuation; neither a matching value nor a failed
+workflow proves completion. Preserve the original evidence and never blind-replay
+an uncertain write. Recovery does not add mutation authority.
 
-Keep current-run no-op completion separate from plan preparation. Only `finish-noop` creates its typed zero-operation receipt after positive skipped evidence for the exhaustive reviewed mutation inventory. Preserve declined proposals as inert evidence. For `preview-only`, retain each raw planning report under `previews/` with its exact hash; do not invent a review or treat preview operations as executed. Do not mark an approved or started apply as a no-op, rewrite the source proof, invent provider acknowledgements, or backfill legacy attempts.
+Use the trusted control checkout and runtime `GITHUB_WORKFLOW_SHA`. Transfer the
+original package between isolated jobs by immutable upload ID and digest. Run
+untrusted candidate verification without mutation credentials. Native finalization
+checks completion; adapters must not manufacture receipts or edit saved journals.
 
-After an actual normal artifact upload, `finalize` verifies exact retained bytes and creates a new checkpoint if the invocation is terminal. Keep the original upload and checkpoint receipts. A green workflow, upload success, or context phase alone does not establish terminal execution.
+For adoption from older workflow history, CLI 0.6.0 uses one optional
+[`history_start`](references/history-start.md) in the reviewed repository policy.
+Resolve or explicitly account for unfinished old operations before selecting it.
+This excludes old runs from future automation; it does not settle or replay them.
+Do not move it forward to bypass interrupted native work.
 
-Branch cleanup in 0.3.0 can retain a typed `already_absent` outcome with zero
-operations after complete live evidence proves the exact merged PR's branch
-is absent. Keep the actual completed merge parent and its existing reviewed
-cleanup child. Interrupted recovery may resume that exact zero-write child;
-it never replays the parent or creates a new child in an observer context.
-An absent branch cannot resolve an uncertain deletion without the original
-positive acknowledgement.
-
-## Reviewed legacy evidence
-
-Use `runs legacy-review` for offline verification of one exact signed attempt, then use the read-only import preview to capture complete current Actions history and an explicit local import only after its exact review digest is separately listed in the trusted workflow policy. These commands print summaries only; `--out` writes the full sensitive envelope to a private mode-0600 file. A review digest or `--approve-review-sha` is an artifact identity check, not human approval or a provider-write grant. The import preserves the raw report and archival packet as a chain-v5 legacy outcome; it does not synthesize a native plan, journal, or completion receipt. An explicit legacy checkpoint ends at its final reviewed import, with no native suffix or open prepared frontier; any later native suffix must come from authenticated hosted checkpoint acquisition and match the explicit prefix. SDK-v1 observations can be retained as effects, but never establish terminal completion. Read the [legacy evidence reference](references/legacy-evidence.md) for exact document shapes, sample commands, disposition rules, and the archive-key trust boundary.
-
-The legacy review and import commands require CLI 0.3.0 or later.
-
-## Reviewed unknown-history cutover
-
-Use the [history cutover reference](references/history-cutover.md) when original legacy evidence is unavailable. CLI 0.4.0 captures a complete terminal history, keeps every old attempt explicitly unknown and quarantined, and requires review of that exact baseline. Capture is read-only; offline validation checks shape and digest only. Honor separately reserved publication, installation, consumer promotion and baseline activation. Their distinct records do not require repeated user decisions when one explicit approval already covers the ready artifacts and actions.
-
-A baseline must never absorb uncaptured later attempts or be changed to clear a hold. Schema-6 recovery is preview-only and blocks executable plan registration, mutation resumption and publication. Every future native attempt still needs its own qualified evidence. Preserve the same reviewed baseline in all checkpoints. A configured GitHub issue can record review independently of source commits; authenticated authorship is not proof of human consent, so obtain the user's approval for the exact baseline before recording an approval statement on their behalf.
-
-This source captures [large complete histories](references/history-archive.md) as bounded, sealed gzip/NDJSON evidence when needed. Use the same capture commands; no format choice is required. Keep the complete original baseline and its outer review digest through native checkpoints and promotion. Compression does not establish freshness, review or activation. Never trim inventories or raise limits to clear a capture hold.
-
-For an explicitly authorized transition to fresh native work, use the [promotion reference](references/history-promotion.md) with a qualified CLI 0.5.0 or newer. Capture the idle exact preview lineage, unchanged trusted policy, selected future plan names and explicit live reconciliation reads. Obtain human approval for the exact promotion before recording its independent review. Present that review and a ready consumer activation plan in one decision when both are explicitly included; retain each grant and its limits. Schema 7 retains that same grant and quarantine through native interruptions and receipts; `fresh` with `mode: fresh-native` permits only the selected native scope and the normal per-plan review. It never approves historical replay, historical settlement, publication or broader workflow permissions. Review failures, revocation, policy drift and lost lineage hold work.
+Recovery metadata releases, baseline imports, promotion comments and runtime
+history-document inputs are retired. Do not recreate them. Retain historical
+records as evidence. New scoped checkpoints require the qualified 0.6.0 CLI;
+source edits alone do not install it or activate a consumer workflow.
