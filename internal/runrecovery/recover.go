@@ -41,6 +41,12 @@ func (e *Engine) inspectHistoricalPackage(ctx context.Context, reader ActionsRea
 	if err != nil {
 		return nil, err
 	}
+	plans, _ := array(runContext["plans"], "historical plans")
+	isHandoff := artifact["name"] == RecoveryArtifactName(target, runID, attempt)+"-handoff-00"
+	if isHandoff || (runContext["phase"] == "prepared" && len(plans) == 0 && runContext["publication"] == nil) {
+		record, err := e.undispatchedNoopRecord(ctx, reader, extracted, run, target, artifact, runContext)
+		return Object{"kind": "terminal", "record": record}, err
+	}
 	if runContext["phase"] == "completed" {
 		if (runContext["recovered_from_run_id"] != nil || runContext["recovered_from_attempt"] != nil) && !preparedFrontierOpen {
 			return nil, errors.New("historical observer requires its separate original source checkpoint")
@@ -64,7 +70,7 @@ func (e *Engine) inspectHistoricalPackage(ctx context.Context, reader ActionsRea
 	if runContext["phase"] != "dispatching" && !preparedPublication && !preparedNative {
 		return nil, errors.New("prepared or no-plan attempt lacks source-qualified no-dispatch proof")
 	}
-	plans, err := terminalPlanInputs(extracted, runContext, false)
+	plans, err = terminalPlanInputs(extracted, runContext, false)
 	if err != nil {
 		return nil, err
 	}
@@ -475,6 +481,20 @@ func (e *Engine) Recover(ctx context.Context, reader ActionsReader, invocation I
 					return hold(errors.New("earliest unsettled attempt has duplicated recovery artifacts"))
 				}
 				metadata = candidate
+			}
+		}
+		if metadata == nil {
+			// A pre-dispatch handoff is considered only when there is no final
+			// package. Its contents must prove the distinct undispatched no-op
+			// case; it cannot recover plans, journals or unknown writes.
+			name += "-handoff-00"
+			for _, candidate := range allArtifacts {
+				if candidate["name"] == name {
+					if metadata != nil {
+						return hold(errors.New("earliest unsettled attempt has duplicated no-op handoffs"))
+					}
+					metadata = candidate
+				}
 			}
 		}
 		if metadata == nil {
