@@ -129,6 +129,10 @@ func (e *Engine) validateUndispatchedNoop(record, target Object) error {
 	if err != nil {
 		return err
 	}
+	eventTarget, err := Exact(runContext["attempt_target"], []string{"event_sha256"}, "original no-op event target")
+	if err != nil || eventTarget["event_sha256"] != SHA256(eventBytes) {
+		return errors.New("undispatched no-op target does not bind its exact trigger event")
+	}
 	observation, observationBytes, err := reader.read("recovery-observation.json", "original no-op history observation")
 	if err != nil {
 		return err

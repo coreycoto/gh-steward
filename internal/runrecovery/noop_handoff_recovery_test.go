@@ -114,7 +114,7 @@ func mutateNoopJSON(t *testing.T, f interruptedNoopFixture, path string, change 
 }
 
 func TestUndispatchedNoopRecoveryKeepsIncompleteOrDispatchedWorkHeld(t *testing.T) {
-	cases := []string{"active-attempt", "started-job", "missing-job", "duplicate-job", "incomplete-jobs", "wrong-job-attempt", "missing-source", "changed-source", "control-head", "unknown-decision", "wrong-decision-event", "wrong-observation-run", "wrong-observation-target", "wrong-prefix", "open-frontier", "missing-decision", "unreferenced-candidate", "plan-file", "journal-file", "dispatch-inventory", "legacy-phase", "publication", "expired-artifact", "duplicate-handoff", "corrupt-archive", "wrong-artifact-head", "wrong-context-target"}
+	cases := []string{"active-attempt", "started-job", "missing-job", "duplicate-job", "incomplete-jobs", "wrong-job-attempt", "missing-source", "changed-source", "control-head", "unknown-decision", "wrong-decision-event", "wrong-observation-run", "wrong-observation-target", "wrong-prefix", "open-frontier", "missing-decision", "unreferenced-candidate", "plan-file", "journal-file", "dispatch-inventory", "legacy-phase", "publication", "expired-artifact", "duplicate-handoff", "corrupt-archive", "wrong-artifact-head", "wrong-context-target", "unbound-event-target"}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newInterruptedNoopFixture(t)
@@ -174,6 +174,10 @@ func TestUndispatchedNoopRecoveryKeepsIncompleteOrDispatchedWorkHeld(t *testing.
 				mutateNoopJSON(t, f, "run-context.json", func(v Object) { v["publication"] = nil })
 			case "wrong-context-target":
 				mutateNoopJSON(t, f, "run-context.json", func(v Object) { v["attempt_target"] = Object{"event_sha256": strings.Repeat("0", 64)} })
+			case "unbound-event-target":
+				for _, path := range []string{"run-context.json", noopDecisionPath} {
+					mutateNoopJSON(t, f, path, func(v Object) { v["attempt_target"] = Object{"event_sha256": strings.Repeat("0", 64)} })
+				}
 			}
 			f.upload(t, "-handoff-00")
 			switch name {
