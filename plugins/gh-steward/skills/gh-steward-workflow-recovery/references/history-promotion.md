@@ -144,7 +144,7 @@ and terminal checkpoint validation retain their ordinary contracts. Once an actu
 native checkpoint exists, its sealed proof can survive diagnostic-upload expiry.
 Old schema-1/2 promotions cannot inherit hold coverage or reuse their approval.
 Qualify a released schema-3 executable and obtain review of the exact new promotion
-and separately authorized activation; source merge alone performs neither.
+and explicit activation authority; source merge alone performs neither.
 
 The preview checkpoint may contain a [compressed large-history baseline](history-archive.md).
 Promotion keeps its complete sealed document and reviewed digest. It does not
@@ -157,6 +157,16 @@ identity and write permission do not establish human consent. An agent may post
 an approval statement on a user's behalf only after the user approves that exact
 artifact and scope. Generic automation approval, a source merge, a baseline
 review or a digest flag cannot authorize promotion.
+
+The user may approve this exact promotion and a ready activation plan in one
+decision. Present the review statements, publication destination and visibility,
+exact document bytes, input changes, qualification scope, attempt limits and
+failure handling together. Keep baseline and promotion statements independent,
+record each only after its exact consent, and recheck state before every action.
+An upload ID may be bound from its verified acknowledgement when that recipe is
+explicitly approved; it cannot identify a different document. Preserve stages
+the user reserved for a later decision. Unknown future plans and changed,
+expired or consumed grants still require their own exact review.
 
 In the configured issue, a trusted reviewer with current write, maintain or admin
 permission can record this exact first line:
@@ -183,7 +193,7 @@ in a workflow with a promotion channel resolves current reviews anew.
 
 ## Activation and native evidence
 
-After exact review and separately authorized consumer activation, the workflow
+After exact review and explicitly authorized consumer activation, the workflow
 can provide the reviewed document to recovery:
 
 ```sh
