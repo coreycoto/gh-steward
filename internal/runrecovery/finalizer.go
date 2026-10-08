@@ -34,6 +34,10 @@ func (e *Engine) invocationHistory(ctx context.Context, reader ActionsReader, in
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
+	runs, err = e.scopeHistory(invocation.Workflow, invocation.RunID, runs)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
 	var current Object
 	for _, run := range runs {
 		if exactInt(run["id"], invocation.RunID) {
@@ -68,9 +72,6 @@ func (e *Engine) invocationHistory(ctx context.Context, reader ActionsReader, in
 }
 
 func (e *Engine) invocationContext(root string, invocation Invocation) (Object, error) {
-	if _, err := e.promotionAtRoot(root, invocation.Workflow); err != nil {
-		return nil, err
-	}
 	data, err := ReadPackageFile(root, "run-context.json")
 	if err != nil {
 		return nil, err
@@ -250,13 +251,6 @@ func (e *Engine) terminalRecord(ctx context.Context, reader ActionsReader, invoc
 }
 
 func (e *Engine) finalizePendingCheckpoint(ctx context.Context, reader ActionsReader, options FinalizeOptions, root, destination string, runContext Object) (Object, error) {
-	cutover, err := e.previewOnlyCutoverAtRoot(root, options.Workflow)
-	if err != nil {
-		return nil, err
-	}
-	if cutover {
-		return nil, errors.New("preview-only history cutover cannot checkpoint resumable execution")
-	}
 	if runContext["publication"] != nil || len(runContext["plans"].([]any)) == 0 ||
 		(runContext["phase"] != "prepared" && runContext["phase"] != "dispatching") {
 		return Object{"outcome": "pending"}, nil
@@ -420,22 +414,6 @@ func (e *Engine) Finalize(ctx context.Context, reader ActionsReader, options Fin
 		return nil, err
 	}
 	entries := runContext["plans"].([]any)
-	cutover, err := e.previewOnlyCutoverAtRoot(root, options.Workflow)
-	if err != nil {
-		return nil, err
-	}
-	if cutover {
-		if len(entries) == 0 && runContext["publication"] == nil {
-			return Object{"outcome": "pending"}, nil
-		}
-		if runContext["publication"] != nil || len(entries) != 1 {
-			return nil, errors.New("preview-only history cutover permits only exact zero-operation workflow-noop completion")
-		}
-		entry, err := object(entries[0], "preview-only workflow-noop context plan")
-		if err != nil || entry["name"] != "workflow-noop" || entry["command"] != "workflow-noop" || entry["status"] != "completed" {
-			return nil, errors.New("preview-only history cutover permits only exact zero-operation workflow-noop completion")
-		}
-	}
 	if len(entries) == 0 && runContext["publication"] == nil {
 		return Object{"outcome": "pending"}, nil
 	}
@@ -494,7 +472,7 @@ func (e *Engine) Finalize(ctx context.Context, reader ActionsReader, options Fin
 	if err != nil {
 		return nil, err
 	}
-	chain, err := EmptyChain(target)
+	chain, err := e.emptyChain(target)
 	if err != nil {
 		return nil, err
 	}

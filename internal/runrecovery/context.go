@@ -39,9 +39,6 @@ func (e *Engine) InitializeContext(root string, input Object) (Object, error) {
 	if _, err := e.workflowPolicy(fmt.Sprint(workflow)); err != nil {
 		return nil, err
 	}
-	if _, err := e.promotionAtRoot(root, fmt.Sprint(workflow)); err != nil {
-		return nil, err
-	}
 	if !strings.EqualFold(fmt.Sprint(repository), e.repository.Owner+"/"+e.repository.Name) {
 		return nil, recoveryError("new run context belongs to another repository")
 	}
@@ -576,28 +573,12 @@ func (e *Engine) SetContextPhase(root, phase, reason string) (Object, error) {
 	return context, nil
 }
 
-// MarkContextPlan advances one plan monotonically and records completion only
-// after its full native v2 plan, journal and apply result validate.
-func rejectPreviewOnlyCutoverRoot(e *Engine, root, workflow, operation string) error {
-	cutover, err := e.previewOnlyCutoverAtRoot(root, workflow)
-	if err != nil {
-		return err
-	}
-	if cutover {
-		return recoveryError("preview-only history cutover forbids %s", operation)
-	}
-	return nil
-}
-
 func (e *Engine) MarkContextPlan(root, name, status string) (Object, error) {
 	if status != "dispatching" && status != "completed" {
 		return nil, recoveryError("context plan transition is unsupported")
 	}
 	context, err := e.readRunContext(root)
 	if err != nil {
-		return nil, err
-	}
-	if err := rejectPreviewOnlyCutoverRoot(e, root, fmt.Sprint(context["workflow_file"]), "plan transition"); err != nil {
 		return nil, err
 	}
 	entry, err := contextPlanByName(context, name)
@@ -664,9 +645,6 @@ func (e *Engine) MarkContextPlan(root, name, status string) (Object, error) {
 func (e *Engine) CaptureJournal(root, journalRoot, name string) (Object, error) {
 	context, err := e.readRunContext(root)
 	if err != nil {
-		return nil, err
-	}
-	if err := rejectPreviewOnlyCutoverRoot(e, root, fmt.Sprint(context["workflow_file"]), "journal capture"); err != nil {
 		return nil, err
 	}
 	entry, err := contextPlanByName(context, name)
@@ -775,9 +753,6 @@ func validateJournalAdvance(previous, current Object, plan contract.Plan, journa
 func (e *Engine) InstallRestoredJournal(root, journalRoot, name string) (Object, error) {
 	context, err := e.readRunContext(root)
 	if err != nil {
-		return nil, err
-	}
-	if err := rejectPreviewOnlyCutoverRoot(e, root, fmt.Sprint(context["workflow_file"]), "journal installation"); err != nil {
 		return nil, err
 	}
 	entry, err := contextPlanByName(context, name)
@@ -1021,9 +996,6 @@ func (e *Engine) readRunContext(root string) (Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := e.promotionAtRoot(root, fmt.Sprint(context["workflow_file"])); err != nil {
-		return nil, err
-	}
 	if err := e.validateRunContext(context); err != nil {
 		return nil, err
 	}
@@ -1042,8 +1014,11 @@ func (e *Engine) validateRunContext(context Object) error {
 	if err != nil {
 		return err
 	}
-	if e.activePromotions[fmt.Sprint(context["workflow_file"])] != nil && context["publication"] != nil {
-		return recoveryError("history promotion excludes publication contexts")
+	if workflowPolicy.historyStart != nil {
+		id, err := positiveInteger(context["workflow_run_id"], "context workflow run ID")
+		if err != nil || id <= mustPositive(workflowPolicy.historyStart["id"]) {
+			return recoveryError("excluded historical runs cannot create or resume a context")
+		}
 	}
 	if !strings.EqualFold(fmt.Sprint(context["repository"]), e.repository.Owner+"/"+e.repository.Name) ||
 		!contextKeyPattern.MatchString(fmt.Sprint(context["recovery_key"])) || !nonemptyString(context["run_name"]) {
@@ -1076,9 +1051,6 @@ func (e *Engine) validateRunContext(context Object) error {
 	for _, raw := range plans {
 		entry, err := exactWithOptional(raw, runContextPlanRequiredFields, runContextPlanOptionalFields, "context plan entry")
 		if err != nil {
-			return err
-		}
-		if err := e.validatePromotionPlanScope(context, entry); err != nil {
 			return err
 		}
 		name, nameOK := entry["name"].(string)
@@ -1280,6 +1252,9 @@ func contextPlanIsCompletedWorkflowNoop(value any) bool {
 }
 
 func (e *Engine) validateTargetForContext(workflow, repository string, run Object) error {
+	if start := e.workflows[workflow].historyStart; start != nil && mustPositive(run["id"]) <= mustPositive(start["id"]) {
+		return recoveryError("excluded historical runs cannot become recovery sources")
+	}
 	workflowID, err := positiveInteger(run["workflow_id"], "source workflow ID")
 	if err != nil {
 		return err
